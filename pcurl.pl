@@ -11,7 +11,7 @@ use Pod::Usage;
 use IPC::Open3;
 use IO::Socket::INET;
 use IO::Select;
-use Carp::Always;
+# use Carp::Always;
 
 our $VERSION = 0.1;
 $|++; # auto flush messages
@@ -52,13 +52,13 @@ unless ($url = parse_url($cli_url)){
 $uagent = $arg_agent || "pcurl v$VERSION";
 
 if ($arg_httpv09){
-    $http_vers = '09';
+    $http_vers = '0.9';
 } elsif ($arg_httpv10){
-    $http_vers = '10';
+    $http_vers = '1.0';
 } elsif ($arg_httpv11){
-    $http_vers = '11';
+    $http_vers = '1.1';
 } elsif ($url->{scheme} =~ /^http/){
-    $http_vers = '10';
+    $http_vers = '1.0';
 }
 
 
@@ -67,7 +67,8 @@ if ($arg_method){
         $arg_method = uc $arg_method;
         die "HTTP/0.9 only supports GET method.\n" if $arg_method ne 'GET' and HTTP09();
     } else {
-        die "$arg_method: unknown method\n";
+        # send anyway ?
+        # die "$arg_method: unknown method\n";
     }
 }
 
@@ -76,7 +77,7 @@ if ($arg_method){
 # respect no_proxy or --noproxy
 # manual proxy or --proxy
 
-say STDERR "Url = $url->{url}\nScheme = $url->{scheme}\nAuth = $url->{auth}\nHost = $url->{host}\nPort = $url->{port}\nPath = $url->{path}\nParams = $url->{params}";
+#say STDERR "Url = $url->{url}\nScheme = $url->{scheme}\nAuth = $url->{auth}\nHost = $url->{host}\nPort = $url->{port}\nPath = $url->{path}\nParams = $url->{params}";
 
 if ($url->{scheme} =~ /^http/){
     my $method = $arg_method || 'GET';
@@ -86,27 +87,51 @@ if ($url->{scheme} =~ /^http/){
 sub process_http {
     my $method = shift;
     my $url = shift;
+
+    my $headers = make_request_headers($method, $url);
+    
     my ($IN, $OUT, $ERR);
     ($OUT, $IN, $ERR) = connect_direct_socket($url->{host}, $url->{port}) if $url->{scheme} eq 'http';
     ($OUT, $IN, $ERR) = connect_ssl_tunnel($url->{host}, $url->{port}) if $url->{scheme} eq 'https';
-    
-    my @head = (
-        "${method} $url->{path} HTTP/1.0",
-        "User-Agent: ${uagent}",
-        "",
-        "",
-        );
-    my $request = join( "\r\n", @head );
-    # select $OUT;
-    # $| = 1;
-    # binmode $OUT;
+
+    if ($arg_verbose){
+        say STDOUT "> $_" for @$headers;
+    }
+    my $request = join( "\r\n", @$headers ) . "\r\n\r\n";
+    # $OUT->print($request);
     print $OUT $request;
-    # $OUT->flush;
-    shutdown $OUT, 1;
 
-    # my @data = (<$IN>);
-    # print STDOUT "result >>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>\n@data\n---EOT---\n";
+    process_http_response($IN, $ERR);
+    
+    close $IN;
+    close $OUT;
+    close $ERR if $ERR;
+}
 
+sub make_request_headers {
+    my $method = shift;
+    my $url = shift;
+    my $h = [];
+
+    if (HTTP09()){
+        push @$h, "${method} $url->{path}", ''; # This is the minimal request (in 0.9)
+    } else {
+        push @$h, "${method} $url->{path} HTTP/${http_vers}"; # This is the minimal request (in 0.9)
+        push @$h, "User-Agent: ${uagent}";
+        push @$h, '';
+    }
+    
+    return $h;
+}
+
+sub process_http_response {
+    my $IN = shift;
+    my $ERR = shift;
+    my $headers_done = 0;
+    my $content_size = 0;
+    my $next_chunk_size = undef;
+    my $received = 0;
+    
     my $selector = IO::Select->new();
     $selector->add($ERR) if $ERR;
     $selector->add($IN);
@@ -114,16 +139,40 @@ sub process_http {
     while (my @ready = $selector->can_read) {
         foreach my $fh (@ready) {
             if ($ERR && fileno($fh) == fileno($ERR)) {print STDERR "STDERR: ", scalar <$fh>};
-            if (fileno($fh) == fileno($IN)) {print "$_" for <$fh>};
+            if (fileno($fh) == fileno($IN)) {
+                if (! $headers_done){
+                    local $/ = "\r\n";
+                    HEAD: while(my $line = <$IN>){
+                        chomp $line;
+                        if ($line =~ /^Content-Length: (\d+)/){
+                            $content_size = $1;
+                        }                            
+                        print STDOUT '< ' if $arg_verbose;
+                        say STDOUT $line;
+                        unless ($line){
+                            $headers_done = 1;
+                            last HEAD;
+                        }
+                    }
+                } else {
+                    $next_chunk_size = $content_size unless $next_chunk_size;
+                    my $buf_size = 2 * 1024 * 1024;
+                    my $block = $IN->sysread(my $buf, $buf_size);
+                    if ($block){
+                    # while (sysread($IN, my $buf, $buf_size)){
+                    
+                        $received += $block;#length($buf);
+                        print STDOUT $buf;
+                    }
+                    # say STDERR 'Done?' , eof($fh), $received ;
+                }
+                # there may have additional info
+            };
             # print STDOUT $_ for <$fh>;
             $selector->remove($fh) if eof($fh);
         }
     }
 
-    
-    close $IN;
-    close $OUT;
-    close $ERR if $ERR;
 }
 
 # Extract de differents parts from an URL
@@ -170,13 +219,13 @@ sub parse_url {
 }
 
 sub HTTP09 {
-    return ($http_vers && $http_vers eq '09') ? 1 : undef;
+    return ($http_vers && $http_vers eq '0.9') ? 1 : undef;
 }
 sub HTTP10 {
-    return ($http_vers && $http_vers eq '10') ? 1 : undef;
+    return ($http_vers && $http_vers eq '1.0') ? 1 : undef;
 }
 sub HTTP11 {
-    return ($http_vers && $http_vers eq '11') ? 1 : undef;
+    return ($http_vers && $http_vers eq '1.1') ? 1 : undef;
 }
 
 sub connect_direct_socket {
