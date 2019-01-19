@@ -80,6 +80,7 @@ if ($arg_method){
 
 if ($url->{scheme} =~ /^http/){
     my $method = $arg_method || 'GET';
+    #$url->{path} = '*' if $method eq 'OPTIONS';
     process_http($method, $url);
 }
 
@@ -115,9 +116,11 @@ sub make_request_headers {
     if (HTTP09()){
         push @$h, "${method} $url->{path}", ''; # This is the minimal request (in 0.9)
     } else {
-        push @$h, "${method} $url->{path} HTTP/${http_vers}"; # This is the minimal request (in 0.9)
+        push @$h, "${method} $url->{path} HTTP/${http_vers}";
+        push @$h, "Host: $url->{host}";        
         push @$h, "User-Agent: ${uagent}";
-        push @$h, '';
+        push @$h, 'Accept: */*';
+        push @$h, 'Connection: close';
     }
     
     return $h;
