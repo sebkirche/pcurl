@@ -61,7 +61,6 @@ if ($arg_httpv09){
     $http_vers = '1.0';
 }
 
-
 if ($arg_method){
     if ($arg_method =~ /^(GET|HEAD|POST|PUT|TRACE|OPTIONS|DELETE)$/i){
         $arg_method = uc $arg_method;
@@ -128,9 +127,10 @@ sub process_http_response {
     my $IN = shift;
     my $ERR = shift;
     my $headers_done = 0;
-    my $content_size = 0;
+    my $content_length = 0;
     my $next_chunk_size = undef;
     my $received = 0;
+    my %headers;
     
     my $selector = IO::Select->new();
     $selector->add($ERR) if $ERR;
@@ -138,29 +138,36 @@ sub process_http_response {
 
     while (my @ready = $selector->can_read) {
         foreach my $fh (@ready) {
-            if ($ERR && fileno($fh) == fileno($ERR)) {print STDERR "STDERR: ", scalar <$fh>};
+            if ($ERR && (fileno($fh) == fileno($ERR))) {
+                while(my $line = <$fh>){
+                    print STDERR "STDERR: $line";
+                }
+            }
             if (fileno($fh) == fileno($IN)) {
-                if (! $headers_done){
+                if (! $headers_done && !HTTP09()){ # there is no header in HTTP/0.9
                     local $/ = "\r\n";
-                    HEAD: while(my $line = <$IN>){
-                        chomp $line;
-                        if ($line =~ /^Content-Length: (\d+)/){
-                            $content_size = $1;
-                        }                            
-                        print STDOUT '< ' if $arg_verbose;
-                        say STDOUT $line;
-                        unless ($line){
-                            $headers_done = 1;
-                            last HEAD;
-                        }
-                    }
-                } else {
-                    $next_chunk_size = $content_size unless $next_chunk_size;
+                  HEAD: while(my $line = <$IN>){
+                      #chomp $line;
+                      print STDOUT '< ' if $arg_verbose;
+                      print STDOUT $line;
+                      if ($line =~ /^[\r\n]+$/){
+                          $headers_done = 1;
+                          last HEAD;
+                      }
+                      if ($line =~ /^([a-z0-9-]): (.*)$/){
+                          $headers{lc $1} = $2;
+                      }                            
+                  }
+                }
+                unless (eof($fh)){
+                    $content_length = $headers{'content-length'};
+                    $next_chunk_size = $content_length unless $next_chunk_size;
                     my $buf_size = 2 * 1024 * 1024;
-                    my $block = $IN->sysread(my $buf, $buf_size);
+                    my $block = $IN->read(my $buf, $buf_size);
                     if ($block){
-                    # while (sysread($IN, my $buf, $buf_size)){
-                    
+                        say "read $block bytes";
+                        # while (sysread($IN, my $buf, $buf_size)){
+                        
                         $received += $block;#length($buf);
                         print STDOUT $buf;
                     }
@@ -169,6 +176,7 @@ sub process_http_response {
                 # there may have additional info
             };
             # print STDOUT $_ for <$fh>;
+            warn "Extra data for fh $fh ?" unless eof($fh);
             $selector->remove($fh) if eof($fh);
         }
     }
@@ -207,7 +215,7 @@ sub parse_url {
         if ($url->{scheme} eq 'http'){
             $url->{port} = 80;
         } elsif ($url->{scheme} eq 'https'){
-            $url->port = 443;
+            $url->{port} = 443;
         } else {
             say STDERR "Default port unknown for scheme '$url->{scheme}://'...";
             return undef;
