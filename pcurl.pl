@@ -143,7 +143,7 @@ sub process_http_response {
         foreach my $fh (@ready) {
             if ($ERR && (fileno($fh) == fileno($ERR))) {
                 while(my $line = <$fh>){
-                    print STDERR "STDERR: $line";
+                    print STDERR "STDERR: $line" if $arg_verbose;
                 }
             }
             if (fileno($fh) == fileno($IN)) {
@@ -152,7 +152,7 @@ sub process_http_response {
                   HEAD: while(my $line = <$IN>){
                       #chomp $line;
                       print STDOUT '< ' if $arg_verbose;
-                      print STDOUT $line;
+                      print STDOUT $line if $arg_verbose || $arg_info;
                       if ($line =~ /^[\r\n]+$/){
                           $headers_done = 1;
                           last HEAD;
@@ -261,7 +261,7 @@ sub connect_ssl_tunnel {
     $tunnel_pid = open3(*CMD_IN, *CMD_OUT, *CMD_ERR, $cmd);
 
     $SIG{CHLD} = sub {
-        print STDERR "REAPER: status $? on ${tunnel_pid}\n" if waitpid($tunnel_pid, 0) > 0
+        print STDERR "REAPER: status $? on ${tunnel_pid}\n" if waitpid($tunnel_pid, 0) > 0 && $arg_verbose;
     };
     return *CMD_IN, *CMD_OUT, *CMD_ERR;
 }
