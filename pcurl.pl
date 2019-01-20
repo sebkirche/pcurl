@@ -79,7 +79,7 @@ if ($arg_method){
 #say STDERR "Url = $url->{url}\nScheme = $url->{scheme}\nAuth = $url->{auth}\nHost = $url->{host}\nPort = $url->{port}\nPath = $url->{path}\nParams = $url->{params}";
 
 if ($url->{scheme} =~ /^http/){
-    my $method = $arg_method || 'GET';
+    my $method = $arg_info ? 'HEAD' : $arg_method || 'GET';
     #$url->{path} = '*' if $method eq 'OPTIONS';
     process_http($method, $url);
 }
@@ -168,10 +168,8 @@ sub process_http_response {
                     my $buf_size = 2 * 1024 * 1024;
                     my $block = $IN->read(my $buf, $buf_size);
                     if ($block){
-                        say "read $block bytes";
-                        # while (sysread($IN, my $buf, $buf_size)){
-                        
-                        $received += $block;#length($buf);
+                        say STDERR "Read $block bytes" if $arg_verbose;
+                        $received += $block;
                         print STDOUT $buf;
                     }
                     # say STDERR 'Done?' , eof($fh), $received ;
@@ -272,7 +270,7 @@ __END__
 
 =head1 NAME
 
-pcurl.pl - A minimalist curl in Perl.
+pCurl - A minimalist cURL in Perl.
 
 =head1 VERSION
 
@@ -284,7 +282,7 @@ pcurl.pl [options] [url]
 
 =head1 DESCRIPTION
 
-pcurl.pl is a vanilla Perl tool that mimics curl without external dependancies but OpenSSL in the case of a SSL connection.
+pCurl is a vanilla Perl tool that mimics cURL without external dependancies but OpenSSL in the case of a SSL connection. It is intented to provide a subset of cURL when cURL is not available. It is designed to work with a fresh installation of Perl without the need for additional CPAN packages.
 
 =head1 OPTIONS
 
@@ -297,6 +295,38 @@ Display a short help.
 =item B<--man>
 
 Display the full manual.
+
+=item B<-v --verbose>
+
+Show both headers during the communication.
+
+=item B<--basic <user:password>>
+
+Use basic http authentication. Sepcified in the form user:password it is passed to the server in Base64 encoding.
+
+=item B<--url <url>>
+
+Specify explicitly the url. If that parameter is not used, we try to get the url as the remaining text after the parameters.
+
+=item B<--port <port>>
+
+Specify explicitly the port. If not used, we use the port from the url (if specified), or we will try well-known port 80 for HTTP and 443 for HTTPS, depending on the url scheme.
+
+=item B<-a --agent <ua string>>
+
+Specify a string for User-Agent. If not specified the default User-Agent is 'pcurl v$VERSION'.
+
+=item B<--http09 --http10 --http11>
+
+Specify the version of HTTP we want to use. In HTTP/0.9 the only method is GET <url> (without version) and the answer does not return headers, only the body of returned resource. In HTTP/1.0 we can use Host:, Connection: and additional headers. IN HTTP/1.1 the Host: is mandatory and if you do not specify Connection: it is kept open by default. We send automatically a Connection: close by default.
+
+=item B<-X --request <method>>
+
+Specify the method for the request. Common methods are GET, HEAD, POST, PUT, TRACE, OPTIONS and DELETE, but you can specify a custom method. If not specified, we send a GET. 
+
+=item B<-I --head>
+
+Show the document headers only. The shorthand notation for -X HEAD.
 
 =back
 
