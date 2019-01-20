@@ -5,7 +5,7 @@ use feature 'say';
 use utf8;
 use Getopt::Long;
 use Socket;
-use MIME::Base64;
+use MIME::Base64 'encode_base64';
 use Data::Dumper;
 use Pod::Usage;
 use IPC::Open3;
@@ -121,6 +121,9 @@ sub make_request_headers {
         push @$h, "User-Agent: ${uagent}";
         push @$h, 'Accept: */*';
         push @$h, 'Connection: close';
+        my $auth = $arg_basic || $url->{auth};
+        push @$h, 'Authorization: Basic ' . encode_base64($auth) if $auth;
+
     }
     
     return $h;
