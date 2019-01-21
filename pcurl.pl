@@ -29,7 +29,7 @@ BEGIN{                          # automagic breakpoint for warnings when script 
 
 my ($url, $cli_url, $auth_basic, $uagent, $http_vers, $tunnel_pid);
 
-my ($arg_hlp, $arg_man, $arg_debug, $arg_verbose, $arg_basic, $arg_url, $arg_port, $arg_agent, $arg_httpv09, $arg_httpv10, $arg_httpv11, $arg_method, $arg_info, $arg_follow, $arg_proxy, $arg_proxy10, $arg_proxyuser, $arg_noproxy) = ();
+my ($arg_hlp, $arg_man, $arg_debug, $arg_verbose, $arg_basic, $arg_url, $arg_port, $arg_agent, $arg_httpv09, $arg_httpv10, $arg_httpv11, $arg_method, $arg_info, $arg_follow, $arg_proxy, $arg_proxy10, $arg_proxyuser, $arg_noproxy, $arg_stompdest, $arg_stompmsg) = ();
 GetOptions(
     'help|h|?'       => \$arg_hlp,
     'man'            => \$arg_man,
@@ -49,6 +49,8 @@ GetOptions(
     'proxy10=s'      => \$arg_proxy10,
     'proxy-user|U=s' => \$arg_proxyuser,
     'noproxy=s'      => \$arg_noproxy,
+    # 'stompdest=s'    => \$arg_stompdest,
+    'stompmsg=s'     => \$arg_stompmsg,
     ) or pod2usage(2);
 pod2usage(1) if $arg_hlp;
 pod2usage(-exitval => 0, -verbose => 2) if $arg_man;
@@ -75,7 +77,7 @@ if ($arg_httpv09){
     $http_vers = '1.0';
 }
 
-if ($arg_method){
+if ($url->{scheme} =~ /^http/ && $arg_method){
     if ($arg_method =~ /^(GET|HEAD|POST|PUT|TRACE|OPTIONS|DELETE)$/i){
         $arg_method = uc $arg_method;
         die "HTTP/0.9 only supports GET method.\n" if $arg_method ne 'GET' and HTTP09();
@@ -96,6 +98,12 @@ if ($url->{scheme} =~ /^http/){
     my $method = $arg_info ? 'HEAD' : $arg_method || 'GET';
     #$url->{path} = '*' if $method eq 'OPTIONS';
     process_http($method, $url);
+} elsif ($url->{scheme} =~ /^stomp/){
+    unless ($url->{path} && $arg_stompmsg){
+        say STDERR "Message sending with --stompmsg <message> is supported for now.";
+        exit 1;
+    }
+    process_stomp($url);
 }
 
 sub process_http {
@@ -133,6 +141,42 @@ sub process_http {
     close $ERR if $ERR;
 }
 
+sub process_stomp {
+    my $url_final = shift;
+    my ($IN, $OUT, $ERR, $host, $port, $resp);
+    ($OUT, $IN, $ERR) = connect_direct_socket($url_final->{host}, $url_final->{port});
+
+    my $selector = IO::Select->new();
+    $selector->add($IN);
+
+    my ($user, $passwd) = ('guest', 'guest');
+    my $connect = [ 'CONNECT', "login:${user}", "passcode:${passwd}" ];
+    send_stomp_request($OUT, $IN, $connect);
+    
+    while (my @ready = $selector->can_read) {
+        foreach my $fh (@ready) {
+            if (fileno($fh) == fileno($IN)) {
+                my $buf_size = 2 * 1024 * 1024;
+                my $block = $fh->read(my $buf, $buf_size);
+                if($block){
+                    my @lines = split /\0/, $block;
+                    say for @lines;
+                }
+            }
+            $selector->remove($fh) if eof($fh);
+        }
+    }
+}
+
+sub send_stomp_request {
+    my ($OUT, $IN, $headers) = @_;
+    if ($arg_verbose){
+        say STDOUT "> $_" for @$headers;
+    }
+    my $request = join( "\r\n", @$headers ) . "\r\n\0";
+    print $OUT $request;
+}
+
 sub send_http_request {
     my ($IN, $OUT, $ERR, $headers) = @_;
     if ($arg_verbose){
@@ -140,6 +184,7 @@ sub send_http_request {
     }
     my $request = join( "\r\n", @$headers ) . "\r\n\r\n";
     print $OUT $request;
+    $OUT->flush;
 }
 
 sub get_proxy_settings {
@@ -330,6 +375,8 @@ sub parse_url {
             $url->{port} = 80;
         } elsif ($url->{scheme} eq 'https'){
             $url->{port} = 443;
+        } elsif ($url->{scheme} eq 'stomp'){
+            $url->{port} = 61613;
         } else {
             say STDERR "Default port unknown for scheme '$url->{scheme}://'...";
             return undef;
