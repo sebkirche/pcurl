@@ -17,24 +17,38 @@ our $VERSION = 0.1;
 $|++; # auto flush messages
 $Data::Dumper::Sortkeys = 1;
 
+BEGIN{                          # automagic breakpoint for warnings when script is run by perl -d
+    $SIG{__WARN__} = sub {
+        my $msg = shift;
+        chomp $msg;
+        say "Warning: '$msg'";
+        no warnings 'once';     # avoid « Warning: 'Name "DB::single" used only once: possible typo »
+        $DB::single = 1;        # we stop execution if a warning occurs during run
+    };
+}
+
 my ($url, $cli_url, $auth_basic, $uagent, $http_vers, $tunnel_pid);
 
-my ($arg_hlp, $arg_man, $arg_debug, $arg_verbose, $arg_basic, $arg_url, $arg_port, $arg_agent, $arg_httpv09, $arg_httpv10, $arg_httpv11, $arg_method, $arg_info) = (0,0,0,0);
+my ($arg_hlp, $arg_man, $arg_debug, $arg_verbose, $arg_basic, $arg_url, $arg_port, $arg_agent, $arg_httpv09, $arg_httpv10, $arg_httpv11, $arg_method, $arg_info, $arg_follow, $arg_proxy, $arg_proxy10, $arg_proxyuser, $arg_noproxy) = ();
 GetOptions(
-    'help|h|?'    => \$arg_hlp,
-    'man'         => \$arg_man,
-    'debug|d'     => \$arg_debug,
-    'verbose|v'   => \$arg_verbose,
-    'basic=s'     => \$arg_basic,
-    'url=s'       => \$arg_url,
-    'port|p=i'    => \$arg_port,
-    'agent|a=s'   => \$arg_agent,
-    'http09'      => \$arg_httpv09,
-    'http10'      => \$arg_httpv10,
-    'http11'      => \$arg_httpv11,
-    'request|X=s' => \$arg_method,
-    'head|I'      => \$arg_info,
-    
+    'help|h|?'       => \$arg_hlp,
+    'man'            => \$arg_man,
+    'debug|d'        => \$arg_debug,
+    'verbose|v'      => \$arg_verbose,
+    'basic=s'        => \$arg_basic,
+    'url=s'          => \$arg_url,
+    'port|p=i'       => \$arg_port,
+    'agent|a=s'      => \$arg_agent,
+    'http09'         => \$arg_httpv09,
+    'http10'         => \$arg_httpv10,
+    'http11'         => \$arg_httpv11,
+    'request|X=s'    => \$arg_method,
+    'head|I'         => \$arg_info,
+    'location|L'     => \$arg_follow,
+    'proxy|x=s'      => \$arg_proxy,
+    'proxy10=s'      => \$arg_proxy10,
+    'proxy-user|U=s' => \$arg_proxyuser,
+    'noproxy=s'      => \$arg_noproxy,
     ) or pod2usage(2);
 pod2usage(1) if $arg_hlp;
 pod2usage(-exitval => 0, -verbose => 2) if $arg_man;
@@ -86,57 +100,144 @@ if ($url->{scheme} =~ /^http/){
 
 sub process_http {
     my $method = shift;
-    my $url = shift;
+    my $url_final = shift;
 
-    my $headers = make_request_headers($method, $url);
+    my ($IN, $OUT, $ERR, $host, $port, $resp);
+
+    my $url_proxy = get_proxy_settings($url_final);
+    my $pheaders = make_proxy_request($url_proxy, $url_final) if ($url_final->{scheme} eq 'https') ;
     
-    my ($IN, $OUT, $ERR);
-    ($OUT, $IN, $ERR) = connect_direct_socket($url->{host}, $url->{port}) if $url->{scheme} eq 'http';
-    ($OUT, $IN, $ERR) = connect_ssl_tunnel($url->{host}, $url->{port}) if $url->{scheme} eq 'https';
-
-    if ($arg_verbose){
-        say STDOUT "> $_" for @$headers;
+    if ($url_proxy){
+        # FIXME when using OpenSSL and Proxym, we should connect the input/outputs of each other...
+        ($OUT, $IN, $ERR) = connect_direct_socket($url_proxy->{host}, $url_proxy->{port}) if $url_proxy->{scheme} eq 'http';
+        ($OUT, $IN, $ERR) = connect_ssl_tunnel($url_proxy->{host}, $url_proxy->{port}) if $url_proxy->{scheme} eq 'https';
+        $url_final->{proxified} = 1;
+        if ($pheaders && @$pheaders){
+            send_http_request($IN, $OUT, $ERR, $pheaders);
+            $resp = process_http_response($IN, $ERR);
+            say STDERR sprintf('Proxy returned a code %d: %s', $resp->{code}, $resp->{message}) if $arg_verbose || $arg_debug;
+            exit 1 unless $resp->{code} == 200;
+            $url_final->{tunneled} = 1;
+        }
+    } else {
+        ($OUT, $IN, $ERR) = connect_direct_socket($url_final->{host}, $url_final->{port}) if $url_final->{scheme} eq 'http';
+        ($OUT, $IN, $ERR) = connect_ssl_tunnel($url_final->{host}, $url_final->{port}) if $url_final->{scheme} eq 'https';
     }
-    my $request = join( "\r\n", @$headers ) . "\r\n\r\n";
-    # $OUT->print($request);
-    print $OUT $request;
-
-    process_http_response($IN, $ERR);
+    
+    my $headers = make_request($method, $url_final, $url_proxy);
+    send_http_request($IN, $OUT, $ERR, $headers);
+    $resp = process_http_response($IN, $ERR);
     
     close $IN;
     close $OUT;
     close $ERR if $ERR;
 }
 
-sub make_request_headers {
-    my $method = shift;
-    my $url = shift;
-    my $h = [];
+sub send_http_request {
+    my ($IN, $OUT, $ERR, $headers) = @_;
+    if ($arg_verbose){
+        say STDOUT "> $_" for @$headers;
+    }
+    my $request = join( "\r\n", @$headers ) . "\r\n\r\n";
+    print $OUT $request;
+}
 
-    if (HTTP09()){
-        push @$h, "${method} $url->{path}", ''; # This is the minimal request (in 0.9)
-    } else {
-        push @$h, "${method} $url->{path} HTTP/${http_vers}";
-        push @$h, "Host: $url->{host}";        
-        push @$h, "User-Agent: ${uagent}";
-        push @$h, 'Accept: */*';
-        push @$h, 'Connection: close';
-        my $auth = $arg_basic || $url->{auth};
-        push @$h, 'Authorization: Basic ' . encode_base64($auth) if $auth;
+sub get_proxy_settings {
+    my $url_final = shift;
+    my $proxy;
 
+    # if we match an explicit no_proxy argument or no_proxy environment, get out
+    my $no_p = $arg_noproxy || $ENV{no_proxy};
+    if ($no_p){
+        $no_p =~ s/,/|/g;
+        $no_p =~ s/\./\\./g;
+        $no_p =~ s/\*/.*/g;
+        if ($url_final->{host} =~ /$no_p/){
+            return undef;
+        }
     }
     
-    return $h;
+    my $proxy_set;
+    if ($arg_proxy){
+        $proxy_set = $arg_proxy;
+    } elsif ($arg_proxy10){
+        $proxy_set = $arg_proxy10;
+    } elsif ($url_final->{scheme} eq 'http'){
+        $proxy_set = $ENV{http_proxy};
+    } elsif ($url_final->{scheme} eq 'https'){
+        $proxy_set = $ENV{https_proxy};
+    }
+    return undef unless $proxy_set;
+    
+    $proxy = parse_url($proxy_set);
+    unless ($proxy){
+        say STDERR "It's strange to me that `$url` does not look as an url for proxy...";
+        exit 1;
+    }
+    say STDERR "Using proxy $proxy->{url}" if $arg_verbose;
+    return $proxy;
+}
+
+sub make_request {
+    my $method = shift;
+    my $u = shift;
+    my $p = shift;
+    my $headers = [];
+
+    if (HTTP09()){
+        push @$headers, "${method} $u->{path}", ''; # This is the minimal request (in 0.9)
+    } else {
+        if ($u->{tunneled}){
+            # a proxy tunnel uses CONNECT
+            push @$headers, "${method} $u->{path}$u->{params} HTTP/${http_vers}";
+        } else {
+            push @$headers, "${method} $u->{url} HTTP/${http_vers}";
+        }
+        push @$headers, "Host: $u->{host}";        
+        push @$headers, "User-Agent: ${uagent}";
+        push @$headers, 'Accept: */*';
+        push @$headers, 'Connection: close';
+        my $pauth = $arg_proxyuser || $p->{auth};
+        push @$headers, 'Proxy-Authorization: Basic ' . encode_base64($pauth) if $pauth;
+        my $auth = $arg_basic || $u->{auth};
+        push @$headers, 'Authorization: Basic ' . encode_base64($auth) if $auth;
+
+    }
+    return $headers;
+}
+
+sub make_proxy_request {
+    my $p = shift;
+    my $u = shift;
+    my $headers = [];
+
+    if ($u->{scheme} eq 'https'){
+        if (HTTP10()){
+            push @$headers, "CONNECT $u->{host}:$u->{port} HTTP/1.0";
+        } elsif (HTTP11()){
+            push @$headers, "CONNECT $u->{host}:$u->{port} HTTP/1.1";
+        }
+    }
+    push @$headers, "Host: $u->{host}:$u->{port}";
+    push @$headers, "User-Agent: ${uagent}";
+    my $auth = $arg_proxyuser || $p->{auth};
+    push @$headers, 'Proxy-Authorization: Basic ' . encode_base64($auth) if $auth;
+    if (HTTP11()){
+        # push @$headers, 'Proxy-Connection: close';
+    }
+    return $headers;
 }
 
 sub process_http_response {
     my $IN = shift;
     my $ERR = shift;
     my $headers_done = 0;
+    my $status_done = 0;
     my $content_length = 0;
     my $next_chunk_size = undef;
     my $received = 0;
     my %headers;
+    my %status;
     
     my $selector = IO::Select->new();
     $selector->add($ERR) if $ERR;
@@ -157,19 +258,28 @@ sub process_http_response {
                       print STDOUT '< ' if $arg_verbose;
                       print STDOUT $line if $arg_verbose || $arg_info;
                       if ($line =~ /^[\r\n]+$/){
-                          $headers_done = 1;
+                          $headers_done++;
                           last HEAD;
+                      }
+                      if (!$status_done && $line =~ m{^([^\s]+) (\d+) (.*)$}){
+                          $status{proto} = $1;
+                          $status{code} = $2;
+                          $status{message} = $3;
+                          $status_done++;
                       }
                       if ($line =~ /^([a-z0-9-]): (.*)$/){
                           $headers{lc $1} = $2;
                       }                            
                   }
                 }
-                unless (eof($fh)){
+                # my $rfd;
+                # vec($rfd,fileno($fh),1) = 1;
+                # if (select($rfd, undef, undef, 0) >= 0){
+                unless ($fh->eof){
                     $content_length = $headers{'content-length'};
                     $next_chunk_size = $content_length unless $next_chunk_size;
                     my $buf_size = 2 * 1024 * 1024;
-                    my $block = $IN->read(my $buf, $buf_size);
+                    my $block = $fh->read(my $buf, $buf_size);
                     if ($block){
                         say STDERR "Read $block bytes" if $arg_verbose;
                         $received += $block;
@@ -184,7 +294,7 @@ sub process_http_response {
             $selector->remove($fh) if eof($fh);
         }
     }
-
+    return \%status;
 }
 
 # Extract de differents parts from an URL
@@ -194,17 +304,17 @@ sub parse_url {
     unless( $given =~ qr{
         (?<SCHEME> [\w]+ ) (?: :// )
         (?: (?<AUTH> (?&UNRESERVED)+ ( : [^@]+ )? ) @ )?
-        (?<HOST> [^-] (?&UNRESERVED)+ ) \:?
-        (?<PORT> \d+ )?
-        (?<PATH> (?&PCHAR)+ ) 
-        (?<PARAMS> \? (?&PCHAR)* )?
+        (?<HOST> [^-] (?&UNRESERVED)+ )
+        (?: \: (?<PORT> \d+ ))?
+        (?<PATH> (?&PCHAR)+ )?
+        (?: \? (?<PARAMS> (?&PCHAR)* ))?
       
         (?(DEFINE) #from here, define some sub-parts
           (?<PCHAR> (?&UNRESERVED) | (?&PCTENCODED) | (?&SUBDEL) | : | @ )
           (?<PCTENCODED> % (?&HEXDIG) (?&HEXDIG) )
           (?<HEXDIG> [0-9A-Za-z] )
           (?<UNRESERVED> [A-Za-z0-9._~-] )
-          (?<SUBDEL> [/!\$'&()\*\+,.=] )
+          (?<SUBDEL> [/!\$'&()\*\+,\.=] )
         )
             }x ){
         return undef;
@@ -213,7 +323,7 @@ sub parse_url {
     $url->{url} = $given;
     $url->{scheme} = $+{SCHEME};
     $url->{auth} = $+{AUTH} || '';
-    $url->{host} = $+{HOST};
+    $url->{host} = $+{HOST} || '';
     $url->{port} = $arg_port || $+{PORT};
     unless ($url->{port}){
         if ($url->{scheme} eq 'http'){
@@ -225,8 +335,12 @@ sub parse_url {
             return undef;
         }
     }
-    $url->{path} = $+{PATH};
+    $url->{path} = $+{PATH} || '';
     $url->{params} = $+{PARAMS} || '';
+    if ($arg_debug){
+        say STDERR $given;
+        say(STDERR "$_ = $url->{$_}") for(sort(keys %$url));
+    }
     return $url;
 }
 
@@ -330,6 +444,10 @@ Specify the method for the request. Common methods are GET, HEAD, POST, PUT, TRA
 =item B<-I --head>
 
 Show the document headers only. The shorthand notation for -X HEAD.
+
+=item B<-L --location>
+
+Follow HTTP redirects.
 
 =back
 
