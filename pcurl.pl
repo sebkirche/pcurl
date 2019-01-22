@@ -87,11 +87,6 @@ if ($url->{scheme} =~ /^http/ && $arg_method){
     }
 }
 
-# FIXME: manage proxy settings
-# get http[s]_proxy
-# respect no_proxy or --noproxy
-# manual proxy or --proxy
-
 #say STDERR "Url = $url->{url}\nScheme = $url->{scheme}\nAuth = $url->{auth}\nHost = $url->{host}\nPort = $url->{port}\nPath = $url->{path}\nParams = $url->{params}";
 
 if ($url->{scheme} =~ /^http/){
@@ -116,7 +111,7 @@ sub process_http {
     my $pheaders = make_proxy_request($url_proxy, $url_final) if ($url_final->{scheme} eq 'https') ;
     
     if ($url_proxy){
-        # FIXME when using OpenSSL and Proxym, we should connect the input/outputs of each other...
+        # FIXME when using OpenSSL and Proxy, we should connect the input/outputs of each other...
         ($OUT, $IN, $ERR) = connect_direct_socket($url_proxy->{host}, $url_proxy->{port}) if $url_proxy->{scheme} eq 'http';
         ($OUT, $IN, $ERR) = connect_ssl_tunnel($url_proxy->{host}, $url_proxy->{port}) if $url_proxy->{scheme} eq 'https';
         $url_final->{proxified} = 1;
@@ -146,37 +141,68 @@ sub process_stomp {
     my ($IN, $OUT, $ERR, $host, $port, $resp);
     ($OUT, $IN, $ERR) = connect_direct_socket($url_final->{host}, $url_final->{port});
 
-    my $selector = IO::Select->new();
-    $selector->add($IN);
-
     my ($user, $passwd) = ('guest', 'guest');
-    my $connect = [ 'CONNECT', "login:${user}", "passcode:${passwd}" ];
+    my $connect = [ 'CONNECT', "login:${user}", "passcode:${passwd}"];
     send_stomp_request($OUT, $IN, $connect);
-    
-    while (my @ready = $selector->can_read) {
-        foreach my $fh (@ready) {
-            if (fileno($fh) == fileno($IN)) {
-                my $buf_size = 2 * 1024 * 1024;
-                my $block = $fh->read(my $buf, $buf_size);
-                if($block){
-                    my @lines = split /\0/, $block;
-                    say for @lines;
-                }
-            }
-            $selector->remove($fh) if eof($fh);
-        }
+    $resp = process_stomp_response($IN);
+    if ($resp->{command} eq 'CONNECTED'){
+        my $body = $arg_stompmsg;
+        my $len = length($body);
+        my $type = 'text/plain';
+        send_stomp_request($OUT, $IN, [ 'SEND', "destination:$url_final->{path}", "content-type:${type}", "content-length:${len}" ], $body );
+        # this is blocking... $resp = process_stomp_response($IN);
     }
+    close $IN;
+    close $OUT;
+    close $ERR if $ERR;
 }
 
 sub send_stomp_request {
-    my ($OUT, $IN, $headers) = @_;
+    my ($OUT, $IN, $headers, $body) = @_;
     if ($arg_verbose){
         say STDOUT "> $_" for @$headers;
     }
-    my $request = join( "\r\n", @$headers ) . "\r\n\0";
+    my $request = join( "\n", @$headers ) . "\n\n" . ($body || '') . "\000";
     print $OUT $request;
 }
 
+sub process_stomp_response {
+    my $IN = shift;
+        #my $selector = IO::Select->new();
+    #$selector->add($IN);
+    my %frame;
+    
+    #while (my @ready = $selector->can_read) {
+    #    foreach my $fh (@ready) {
+    #        if (fileno($fh) == fileno($IN)) {
+    my $buf_size = 1024 * 1024;
+    my $block = $IN->sysread(my $buf, $buf_size);
+    if($block){
+        if ($buf =~ s/^\n*([^\n].*?)\n\n//s){
+            my $headers = $1;
+            for my $line (split /\n/,  $headers){
+                say STDOUT "< $line" if $arg_verbose || $arg_debug;
+                if ($line =~ /^(\w+)$/){
+                    $frame{command} = $1;
+                }
+                if ($line =~ /^([^:]+):(.*)$/){
+                    $frame{headers}{$1} = $2;
+                }
+            }
+            if ($frame{headers}{'content-length'}){
+                if (length($buf) > $frame{headers}{'content-length'}){
+                    $frame{body} = substr($buf, 0, $frame{headers}{'content-length'}, '');
+                }
+            } elsif ($buf =~ s/^(.*?)\000\n*//s ){
+                $frame{body} = $1;
+            }
+        }
+    #        }
+    #        $selector->remove($fh) if eof($fh);
+    #    }
+    }
+    return \%frame;
+}
 sub send_http_request {
     my ($IN, $OUT, $ERR, $headers) = @_;
     if ($arg_verbose){
