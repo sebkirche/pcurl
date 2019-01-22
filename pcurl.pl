@@ -150,7 +150,8 @@ sub process_stomp {
         my $len = length($body);
         my $type = 'text/plain';
         send_stomp_request($OUT, $IN, [ 'SEND', "destination:$url_final->{path}", "content-type:${type}", "content-length:${len}" ], $body );
-        # this is blocking... $resp = process_stomp_response($IN);
+        # this is blocking...
+        $resp = process_stomp_response($IN);
     }
     close $IN;
     close $OUT;
@@ -168,38 +169,39 @@ sub send_stomp_request {
 
 sub process_stomp_response {
     my $IN = shift;
-        #my $selector = IO::Select->new();
-    #$selector->add($IN);
+    my $selector = IO::Select->new();
+    $selector->add($IN);
     my %frame;
     
-    #while (my @ready = $selector->can_read) {
-    #    foreach my $fh (@ready) {
-    #        if (fileno($fh) == fileno($IN)) {
-    my $buf_size = 1024 * 1024;
-    my $block = $IN->sysread(my $buf, $buf_size);
-    if($block){
-        if ($buf =~ s/^\n*([^\n].*?)\n\n//s){
-            my $headers = $1;
-            for my $line (split /\n/,  $headers){
-                say STDOUT "< $line" if $arg_verbose || $arg_debug;
-                if ($line =~ /^(\w+)$/){
-                    $frame{command} = $1;
+    while (my @ready = $selector->can_read(0.5)) {
+        foreach my $fh (@ready) {
+            if (fileno($fh) == fileno($IN)) {
+                my $buf_size = 1024 * 1024;
+                my $block = $fh->sysread(my $buf, $buf_size);
+                if($block){
+                    if ($buf =~ s/^\n*([^\n].*?)\n\n//s){
+                        my $headers = $1;
+                        for my $line (split /\n/,  $headers){
+                            say STDOUT "< $line" if $arg_verbose || $arg_debug;
+                            if ($line =~ /^(\w+)$/){
+                                $frame{command} = $1;
+                            }
+                            if ($line =~ /^([^:]+):(.*)$/){
+                                $frame{headers}{$1} = $2;
+                            }
+                        }
+                        if ($frame{headers}{'content-length'}){
+                            if (length($buf) > $frame{headers}{'content-length'}){
+                                $frame{body} = substr($buf, 0, $frame{headers}{'content-length'}, '');
+                            }
+                        } elsif ($buf =~ s/^(.*?)\000\n*//s ){
+                            $frame{body} = $1;
+                        }
+                    }
                 }
-                if ($line =~ /^([^:]+):(.*)$/){
-                    $frame{headers}{$1} = $2;
-                }
-            }
-            if ($frame{headers}{'content-length'}){
-                if (length($buf) > $frame{headers}{'content-length'}){
-                    $frame{body} = substr($buf, 0, $frame{headers}{'content-length'}, '');
-                }
-            } elsif ($buf =~ s/^(.*?)\000\n*//s ){
-                $frame{body} = $1;
+                # $selector->remove($fh) if eof($fh);
             }
         }
-    #        }
-    #        $selector->remove($fh) if eof($fh);
-    #    }
     }
     return \%frame;
 }
@@ -314,7 +316,7 @@ sub process_http_response {
     $selector->add($ERR) if $ERR;
     $selector->add($IN);
 
-    while (my @ready = $selector->can_read) {
+    while (my @ready = $selector->can_read(1)) {
         foreach my $fh (@ready) {
             if ($ERR && (fileno($fh) == fileno($ERR))) {
                 while(my $line = <$fh>){
