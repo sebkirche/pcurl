@@ -375,7 +375,7 @@ sub process_http_response {
                 # vec($rfd,fileno($fh),1) = 1;
                 # if (select($rfd, undef, undef, 0) >= 0){
                 my $is_redirect = $resp{status}{code} =~ /^3/;
-                say "Ignoring the response-body" if $is_redirect;
+                say STDERR "Ignoring the response-body" if $is_redirect and $arg_verbose or $arg_debug;
                 unless ($fh->eof){
                     $content_length = $headers{'content-length'};
                     $next_chunk_size = $content_length unless $next_chunk_size;
