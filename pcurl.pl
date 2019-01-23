@@ -27,9 +27,16 @@ BEGIN{                          # automagic breakpoint for warnings when script 
     };
 }
 
+my $max_redirs = 20;
 my ($url, $cli_url, $auth_basic, $uagent, $http_vers, $tunnel_pid);
 
-my ($arg_hlp, $arg_man, $arg_debug, $arg_verbose, $arg_basic, $arg_url, $arg_port, $arg_agent, $arg_httpv09, $arg_httpv10, $arg_httpv11, $arg_method, $arg_info, $arg_follow, $arg_proxy, $arg_proxy10, $arg_proxyuser, $arg_noproxy, $arg_stompdest, $arg_stompmsg) = ();
+my ($arg_hlp, $arg_man, $arg_debug, $arg_verbose,
+    $arg_basic, $arg_url, $arg_port, $arg_agent,
+    $arg_httpv09, $arg_httpv10, $arg_httpv11,
+    $arg_method, $arg_info, $arg_follow, $arg_maxredirs,
+    $arg_proxy, $arg_proxy10, $arg_proxyuser, $arg_noproxy,
+    $arg_stompdest, $arg_stompmsg) = ();
+
 GetOptions(
     'help|h|?'       => \$arg_hlp,
     'man'            => \$arg_man,
@@ -45,6 +52,7 @@ GetOptions(
     'request|X=s'    => \$arg_method,
     'head|I'         => \$arg_info,
     'location|L'     => \$arg_follow,
+    'max-redirs=i'   => \$arg_maxredirs,
     'proxy|x=s'      => \$arg_proxy,
     'proxy10=s'      => \$arg_proxy10,
     'proxy-user|U=s' => \$arg_proxyuser,
@@ -91,7 +99,7 @@ if ($url->{scheme} =~ /^http/ && $arg_method){
 
 if ($url->{scheme} =~ /^http/){
     my $method = $arg_info ? 'HEAD' : $arg_method || 'GET';
-    #$url->{path} = '*' if $method eq 'OPTIONS';
+    #$url->{path} = '*' if $method eq 'OPTIONS';    
     process_http($method, $url);
 } elsif ($url->{scheme} =~ /^stomp/){
     unless ($url->{path} && $arg_stompmsg){
@@ -110,26 +118,43 @@ sub process_http {
     my $url_proxy = get_proxy_settings($url_final);
     my $pheaders = make_proxy_request($url_proxy, $url_final) if ($url_final->{scheme} eq 'https') ;
     
-    if ($url_proxy){
-        # FIXME when using OpenSSL and Proxy, we should connect the input/outputs of each other...
-        ($OUT, $IN, $ERR) = connect_direct_socket($url_proxy->{host}, $url_proxy->{port}) if $url_proxy->{scheme} eq 'http';
-        ($OUT, $IN, $ERR) = connect_ssl_tunnel($url_proxy->{host}, $url_proxy->{port}) if $url_proxy->{scheme} eq 'https';
-        $url_final->{proxified} = 1;
-        if ($pheaders && @$pheaders){
-            send_http_request($IN, $OUT, $ERR, $pheaders);
-            $resp = process_http_response($IN, $ERR);
-            say STDERR sprintf('Proxy returned a code %d: %s', $resp->{code}, $resp->{message}) if $arg_verbose || $arg_debug;
-            exit 1 unless $resp->{code} == 200;
-            $url_final->{tunneled} = 1;
+    my $redirs = $arg_maxredirs || $max_redirs;
+    do {
+        my $headers = make_request($method, $url_final, $url_proxy);
+
+        if ($url_proxy){
+            # FIXME when using OpenSSL and Proxy, we should connect the input/outputs of each other...
+            ($OUT, $IN, $ERR) = connect_direct_socket($url_proxy->{host}, $url_proxy->{port}) if $url_proxy->{scheme} eq 'http';
+            ($OUT, $IN, $ERR) = connect_ssl_tunnel($url_proxy->{host}, $url_proxy->{port}) if $url_proxy->{scheme} eq 'https';
+            $url_final->{proxified} = 1;
+            if ($pheaders && @$pheaders){
+                send_http_request($IN, $OUT, $ERR, $pheaders);
+                $resp = process_http_response($IN, $ERR);
+                say STDERR sprintf('Proxy returned a code %d: %s', $resp->{code}, $resp->{message}) if $arg_verbose || $arg_debug;
+                exit 1 unless $resp->{code} == 200;
+                $url_final->{tunneled} = 1;
+            }
+        } else {
+            ($OUT, $IN, $ERR) = connect_direct_socket($url_final->{host}, $url_final->{port}) if $url_final->{scheme} eq 'http';
+            ($OUT, $IN, $ERR) = connect_ssl_tunnel($url_final->{host}, $url_final->{port}) if $url_final->{scheme} eq 'https';
         }
-    } else {
-        ($OUT, $IN, $ERR) = connect_direct_socket($url_final->{host}, $url_final->{port}) if $url_final->{scheme} eq 'http';
-        ($OUT, $IN, $ERR) = connect_ssl_tunnel($url_final->{host}, $url_final->{port}) if $url_final->{scheme} eq 'https';
-    }
-    
-    my $headers = make_request($method, $url_final, $url_proxy);
-    send_http_request($IN, $OUT, $ERR, $headers);
-    $resp = process_http_response($IN, $ERR);
+
+        send_http_request($IN, $OUT, $ERR, $headers);
+        $resp = process_http_response($IN, $ERR);
+        my $code = $resp->{status}{code};
+        if ($arg_follow && (300 <= $code) && ($code <= 399)){
+            unless($redirs){
+                say STDERR sprintf("Too many redirections (>%d).", $arg_maxredirs || $max_redirs);
+                exit 1;
+            }
+            $url_final = parse_url($resp->{headers}{location});
+            say STDERR sprintf("Redirecting #%d to %s", ($arg_maxredirs || $max_redirs) -  $redirs,  $url_final->{url}) if $arg_verbose || $arg_debug;
+            $redirs--;
+        } else {
+            goto BREAK;         # weird, 'last' is throwing a warning "Exiting subroutine via last"
+        }
+    } while ($url_final && $redirs >= 0);
+  BREAK:
     
     close $IN;
     close $OUT;
@@ -260,11 +285,12 @@ sub make_request {
     if (HTTP09()){
         push @$headers, "${method} $u->{path}", ''; # This is the minimal request (in 0.9)
     } else {
-        if ($u->{tunneled}){
-            # a proxy tunnel uses CONNECT
-            push @$headers, "${method} $u->{path}$u->{params} HTTP/${http_vers}";
-        } else {
+        if ($u->{proxified}){
             push @$headers, "${method} $u->{url} HTTP/${http_vers}";
+        } else {
+            # a proxy tunnel uses CONNECT
+            my $path = $u->{path} . ($u->{params} ? "?$u->{params}" : '');
+            push @$headers, "${method} ${path} HTTP/${http_vers}";
         }
         push @$headers, "Host: $u->{host}";        
         push @$headers, "User-Agent: ${uagent}";
@@ -285,7 +311,7 @@ sub make_proxy_request {
     my $headers = [];
 
     if ($u->{scheme} eq 'https'){
-        if (HTTP10()){
+        if ($arg_proxy10 || HTTP10()){
             push @$headers, "CONNECT $u->{host}:$u->{port} HTTP/1.0";
         } elsif (HTTP11()){
             push @$headers, "CONNECT $u->{host}:$u->{port} HTTP/1.1";
@@ -310,7 +336,7 @@ sub process_http_response {
     my $next_chunk_size = undef;
     my $received = 0;
     my %headers;
-    my %status;
+    my %resp;
     
     my $selector = IO::Select->new();
     $selector->add($ERR) if $ERR;
@@ -327,47 +353,49 @@ sub process_http_response {
                 if (! $headers_done && !HTTP09()){ # there is no header in HTTP/0.9
                     local $/ = "\r\n";
                   HEAD: while(my $line = <$IN>){
-                      #chomp $line;
+                      # $line =~ s/[\r\n]+$//;
                       print STDOUT '< ' if $arg_verbose;
                       print STDOUT $line if $arg_verbose || $arg_info;
-                      if ($line =~ /^[\r\n]+$/){
+                      if ($line =~ s/^[\r\n]+$//){
                           $headers_done++;
                           last HEAD;
                       }
                       if (!$status_done && $line =~ m{^([^\s]+) (\d+) (.*)$}){
-                          $status{proto} = $1;
-                          $status{code} = $2;
-                          $status{message} = $3;
+                          $resp{status}{proto} = $1;
+                          $resp{status}{code} = $2;
+                          $resp{status}{message} = $3;
                           $status_done++;
                       }
-                      if ($line =~ /^([a-z0-9-]): (.*)$/){
-                          $headers{lc $1} = $2;
+                      if ($line =~ /^([A-Za-z0-9-]+): (.*)$/){
+                          $resp{headers}{lc $1} = $2;
                       }                            
                   }
                 }
                 # my $rfd;
                 # vec($rfd,fileno($fh),1) = 1;
                 # if (select($rfd, undef, undef, 0) >= 0){
+                my $is_redirect = $resp{status}{code} =~ /^3/;
+                say "Ignoring the response-body" if $is_redirect;
                 unless ($fh->eof){
                     $content_length = $headers{'content-length'};
                     $next_chunk_size = $content_length unless $next_chunk_size;
                     my $buf_size = 2 * 1024 * 1024;
                     my $block = $fh->read(my $buf, $buf_size);
                     if ($block){
-                        say STDERR "Read $block bytes" if $arg_verbose;
+                        say STDERR "Read $block bytes" if $arg_debug;
                         $received += $block;
-                        print STDOUT $buf;
+                        print STDOUT $buf unless $is_redirect;
                     }
                     # say STDERR 'Done?' , eof($fh), $received ;
                 }
                 # there may have additional info
             };
             # print STDOUT $_ for <$fh>;
-            warn "Extra data for fh $fh ?" unless eof($fh);
+            # warn "Extra data for fh $fh ?" unless eof($fh) ;
             $selector->remove($fh) if eof($fh);
         }
     }
-    return \%status;
+    return \%resp;
 }
 
 # Extract de differents parts from an URL
@@ -410,7 +438,7 @@ sub parse_url {
             return undef;
         }
     }
-    $url->{path} = $+{PATH} || '';
+    $url->{path} = $+{PATH} || '/';
     $url->{params} = $+{PARAMS} || '';
     if ($arg_debug){
         say STDERR $given;
@@ -523,6 +551,30 @@ Show the document headers only. The shorthand notation for -X HEAD.
 =item B<-L --location>
 
 Follow HTTP redirects.
+
+=item B<--max-redirs <nb>>
+
+Specify the maximum number of redirects to follow. Default is 20.
+
+=item B<-x --proxy <proxy_url>>
+
+Set the url of the HTTP/1.1 proxy to use.
+
+=item B<-proxy10 <proxy_url>>
+
+Set the url of the HTTP/1.0 proxy to use.
+
+=item B<-U --proxy-user <user:passwd>>
+
+Set the proxy authentication. Only Basic Auth is supported.
+
+=item B<--noproxy <domain_list>>
+
+Define a coma-separated list of domains that ignore the proxy. 
+
+=item B<--stompmsg <message>>
+
+Content of the message for the STOMP message broker. Use with a stomp://server:port/queuename url. 
 
 =back
 
