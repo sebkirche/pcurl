@@ -3,7 +3,7 @@ use warnings;
 use strict;
 use feature 'say';
 use utf8;
-use Getopt::Long;
+use Getopt::Long qw(:config no_ignore_case bundling);
 use Socket;
 use MIME::Base64 'encode_base64';
 use Data::Dumper;
@@ -35,30 +35,37 @@ my ($arg_hlp, $arg_man, $arg_debug, $arg_verbose,
     $arg_httpv09, $arg_httpv10, $arg_httpv11,
     $arg_method, $arg_info, $arg_follow, $arg_maxredirs,
     $arg_proxy, $arg_proxy10, $arg_proxyuser, $arg_noproxy,
+    $arg_postdata, $arg_posturlencode, $arg_postraw, $arg_postbinary,
     $arg_stompdest, $arg_stompmsg) = ();
+my @arg_custom_headers;
 
 GetOptions(
-    'help|h|?'       => \$arg_hlp,
-    'man'            => \$arg_man,
-    'debug|d'        => \$arg_debug,
-    'verbose|v'      => \$arg_verbose,
-    'basic=s'        => \$arg_basic,
-    'url=s'          => \$arg_url,
-    'port|p=i'       => \$arg_port,
-    'agent|a=s'      => \$arg_agent,
-    'http09'         => \$arg_httpv09,
-    'http10'         => \$arg_httpv10,
-    'http11'         => \$arg_httpv11,
-    'request|X=s'    => \$arg_method,
-    'head|I'         => \$arg_info,
-    'location|L'     => \$arg_follow,
-    'max-redirs=i'   => \$arg_maxredirs,
-    'proxy|x=s'      => \$arg_proxy,
-    'proxy10=s'      => \$arg_proxy10,
-    'proxy-user|U=s' => \$arg_proxyuser,
-    'noproxy=s'      => \$arg_noproxy,
+    'help|h|?'         => \$arg_hlp,
+    'man'              => \$arg_man,
+    'debug|d'          => \$arg_debug,
+    'verbose|v'        => \$arg_verbose,
+    'basic=s'          => \$arg_basic,
+    'url=s'            => \$arg_url,
+    'port|p=i'         => \$arg_port,
+    'agent|a=s'        => \$arg_agent,
+    'header|H=s'       => \@arg_custom_headers,
+    'http09'           => \$arg_httpv09,
+    'http10'           => \$arg_httpv10,
+    'http11'           => \$arg_httpv11,
+    'request|X=s'      => \$arg_method,
+    'head|I'           => \$arg_info,
+    'location|L'       => \$arg_follow,
+    'max-redirs=i'     => \$arg_maxredirs,
+    'proxy|x=s'        => \$arg_proxy,
+    'proxy10=s'        => \$arg_proxy10,
+    'proxy-user|U=s'   => \$arg_proxyuser,
+    'noproxy=s'        => \$arg_noproxy,
+    'data|data-ascii|d=s'         => \$arg_postdata,
+    'data-raw=s'        => \$arg_postraw,
+    'data-binary=s'     => \$arg_postbinary,
+    'data-urlencode=s' => \$arg_posturlencode,
     # 'stompdest=s'    => \$arg_stompdest,
-    'stompmsg=s'     => \$arg_stompmsg,
+    'stompmsg=s'       => \$arg_stompmsg,
     ) or pod2usage(2);
 pod2usage(1) if $arg_hlp;
 pod2usage(-exitval => 0, -verbose => 2) if $arg_man;
@@ -98,7 +105,17 @@ if ($url->{scheme} =~ /^http/ && $arg_method){
 #say STDERR "Url = $url->{url}\nScheme = $url->{scheme}\nAuth = $url->{auth}\nHost = $url->{host}\nPort = $url->{port}\nPath = $url->{path}\nParams = $url->{params}";
 
 if ($url->{scheme} =~ /^http/){
-    my $method = $arg_info ? 'HEAD' : $arg_method || 'GET';
+    my $method;
+    if ($arg_postdata || $arg_posturlencode || $arg_postbinary || $arg_postraw){
+        if ($arg_method && ($arg_method ne 'POST')){
+            say STDERR 'For posting data, method must be POST.';
+            exit 1;
+        } else {
+            $method = 'POST';
+        }
+    } else {
+        $method = $arg_info ? 'HEAD' : $arg_method || 'GET';
+    }
     #$url->{path} = '*' if $method eq 'OPTIONS';    
     process_http($method, $url);
 } elsif ($url->{scheme} =~ /^stomp/){
@@ -116,11 +133,12 @@ sub process_http {
     my ($IN, $OUT, $ERR, $host, $port, $resp);
 
     my $url_proxy = get_proxy_settings($url_final);
-    my $pheaders = make_proxy_request($url_proxy, $url_final) if ($url_final->{scheme} eq 'https') ;
+    my $pheaders = build_http_proxy_headers($url_proxy, $url_final) if ($url_final->{scheme} eq 'https') ;
     
     my $redirs = $arg_maxredirs || $max_redirs;
     do {
-        my $headers = make_request($method, $url_final, $url_proxy);
+        my $body = prepare_http_body();
+        my $headers = build_http_request_headers($method, $url_final, $url_proxy, $body);
 
         if ($url_proxy){
             # FIXME when using OpenSSL and Proxy, we should connect the input/outputs of each other...
@@ -139,7 +157,7 @@ sub process_http {
             ($OUT, $IN, $ERR) = connect_ssl_tunnel($url_final->{host}, $url_final->{port}) if $url_final->{scheme} eq 'https';
         }
 
-        send_http_request($IN, $OUT, $ERR, $headers);
+        send_http_request($IN, $OUT, $ERR, $headers, $body);
         $resp = process_http_response($IN, $ERR);
         my $code = $resp->{status}{code};
         if ($arg_follow && (300 <= $code) && ($code <= 399)){
@@ -231,12 +249,31 @@ sub process_stomp_response {
     return \%frame;
 }
 sub send_http_request {
-    my ($IN, $OUT, $ERR, $headers) = @_;
+    my ($IN, $OUT, $ERR, $headers, $body) = @_;
+    
     if ($arg_verbose){
-        say STDOUT "> $_" for @$headers;
+        print STDOUT "> $_\n" for @$headers;
     }
-    my $request = join( "\r\n", @$headers ) . "\r\n\r\n";
-    print $OUT $request;
+    my $headers_txt = join( "\r\n", @$headers ) . "\r\n";
+    print $OUT $headers_txt;
+
+    if (defined $body){
+        my $sent = 0;
+        print $OUT "\r\n";
+        if (ref $body eq 'HASH'){
+            if (exists $body->{data}){
+                print $OUT $body->{data};
+                $sent = $body->{size};
+            } 
+        } else {
+            print $OUT $body if $body;
+            $sent = length $body;
+        }
+        say STDOUT "* upload completely sent off: $sent bytes";
+    } else {
+        print $OUT "\r\n";
+    }
+    
     $OUT->flush;
 }
 
@@ -276,10 +313,8 @@ sub get_proxy_settings {
     return $proxy;
 }
 
-sub make_request {
-    my $method = shift;
-    my $u = shift;
-    my $p = shift;
+sub build_http_request_headers {
+    my ($method, $u, $p, $body) = @_;
     my $headers = [];
 
     if (HTTP09()){
@@ -292,20 +327,111 @@ sub make_request {
             my $path = $u->{path} . ($u->{params} ? "?$u->{params}" : '');
             push @$headers, "${method} ${path} HTTP/${http_vers}";
         }
-        push @$headers, "Host: $u->{host}";        
-        push @$headers, "User-Agent: ${uagent}";
-        push @$headers, 'Accept: */*';
+
+        # process the custom headers
+        my %custom;
+        for my $ch (@arg_custom_headers){
+            # curl man: Remove an internal header by giving a replacement without content
+            #           on the right side of the colon, as in: -H "Host:".
+            #           If you send the custom header with no-value then its header must be terminated with a semicolon,
+            #           such as -H "X-Custom-Header;" to send "X-Custom-Header:".
+            if ($ch =~ /^([A-Za-z0-9-]+)([:;])\s*(.*)$/){
+                # undef will make header removal
+                $custom{lc $1} = ($2 eq ':' && $3) ? $3 : ($2 eq ';') ? '' : undef; 
+            }
+        }
+        
+        push @$headers, "Host: $u->{host}:$u->{port}";
+        add_http_header($headers, \%custom, 'User-Agent', ${uagent});
+        add_http_header($headers, \%custom, 'Accept', '*/*');
         push @$headers, 'Connection: close';
         my $pauth = $arg_proxyuser || $p->{auth};
-        push @$headers, 'Proxy-Authorization: Basic ' . encode_base64($pauth) if $pauth;
+        add_http_header($headers, \%custom, 'Proxy-Authorization', 'Basic ' . encode_base64($pauth, '')) if $pauth;
         my $auth = $arg_basic || $u->{auth};
-        push @$headers, 'Authorization: Basic ' . encode_base64($auth) if $auth;
+        add_http_header($headers, \%custom, 'Authorization', 'Basic ' . encode_base64($auth, '')) if $auth;
+        map{ add_http_header($headers, \%custom, $_, $custom{$_}) } keys %custom;
 
+        if (defined $body){
+            if (ref $body eq 'HASH'){
+                # if ($body->{kind} eq 'stdin'){
+                    add_http_header($headers, \%custom, 'Content-Length', $body->{size});
+                    add_http_header($headers, \%custom, 'Content-type', $body->{ctype});
+                # }
+            } else {
+                add_http_header($headers, \%custom, 'Content-Length', length $body);
+                add_http_header($headers, \%custom, 'Content-type', 'application/x-www-form-urlencoded');
+            }
+        }
     }
     return $headers;
 }
 
-sub make_proxy_request {
+sub add_http_header {
+    my ($headers, $custom, $name, $default) = @_;
+
+    my $field = lc $name;
+    if (exists $custom->{$field}){
+        my $val = $custom->{$field};
+        if (defined $val){
+            push @$headers, sprintf("%s: %s", $name, $val);
+        }
+    } else {
+        push @$headers, sprintf("%s: %s", $name, $default);
+    }
+}
+
+sub prepare_http_body{
+    my $post = $arg_postdata || $arg_postbinary || $arg_postraw;
+    if ($post){
+        if ($arg_postraw){
+            return $arg_postraw; # we do not interpret the @ in raw mode
+        } elsif ($post =~ /^@(.*)/){
+            if ($1){
+                my $fd;
+                if ($1 eq '-'){
+                    $fd = *STDIN;
+                } elsif (-e $1){
+                    open $fd, '<', $1 or die "cannot open $1: $!";
+                } else {
+                    # file does not exist
+                    say STDERR "Warning: Couldn't read data from file \"$1\", this makes an empty POST.";
+                    return { kind => 'empty',
+                             ctype => 'application/x-www-form-urlencoded'
+                    };
+                }
+                my $data;
+                if ($arg_postdata){
+                    while (my $l = <$fd>){
+                        $l =~ s/[\r\n]+//g;
+                        $data .= $l;
+                    }
+                } elsif ($arg_postbinary){
+                    my $buf_size = 1024 * 1024;
+                    while(my $block = $fd->sysread(my $buf, $buf_size)){
+                        # syswrite $OUT, $buf, $block;
+                        # $sent += $block;
+                        $data .= $buf;
+                    }
+                }
+                close $fd unless fileno($fd) == fileno(STDIN);
+                
+                return {
+                    size => length $data,
+                    ctype => 'application/x-www-form-urlencoded',
+                    data => $data
+                };
+            }
+        } else {
+            return $arg_postdata; # it's a plain text 
+        }        
+    } elsif ($arg_posturlencode){
+        return urlencode($arg_posturlencode);
+    } else {
+        return undef;
+    }
+}
+
+sub build_http_proxy_headers {
     my $p = shift;
     my $u = shift;
     my $headers = [];
@@ -366,7 +492,7 @@ sub process_http_response {
                           $resp{status}{message} = $3;
                           $status_done++;
                       }
-                      if ($line =~ /^([A-Za-z0-9-]+): (.*)$/){
+                      if ($line =~ /^([A-Za-z0-9-]+):\s*(.*)$/){
                           $resp{headers}{lc $1} = $2;
                       }                            
                   }
@@ -445,6 +571,19 @@ sub parse_url {
         say(STDERR "$_ = $url->{$_}") for(sort(keys %$url));
     }
     return $url;
+}
+
+sub urlencode {
+    my $s = shift;
+    $s =~ s/([^A-Za-z0-9])/sprintf("%%%02X", ord($1))/eg;
+    return $s;
+}
+
+sub urldecode {
+    my $s = shift;
+    $s =~ s/\+/ /g;
+    $s =~ s/%(..)/pack('c', hex($1))/eg;
+    return $s;
 }
 
 sub HTTP09 {
