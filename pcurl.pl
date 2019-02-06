@@ -13,7 +13,7 @@ use IO::Socket::INET;
 use IO::Select;
 # use Carp::Always;
 
-our $VERSION = 0.1;
+our $VERSION = 0.2;
 $|++; # auto flush messages
 $Data::Dumper::Sortkeys = 1;
 
