@@ -41,7 +41,7 @@ $SIG{CONT} = sub { $SIG{TSTP} = \&suspend_trap; say "SIGCONT received - continue
 # --------------------------------------------------
 
 
-my $max_redirs = 20;
+my $max_redirs = 50; 
 my ($url, $cli_url, $auth_basic, $uagent, $http_vers, $tunnel_pid);
 
 my ($arg_hlp, $arg_man, $arg_debug, $arg_verbose,
@@ -150,8 +150,9 @@ sub process_http {
 
     my $url_proxy = get_proxy_settings($url_final);
     my $pheaders = build_http_proxy_headers($url_proxy, $url_final) if ($url_final->{scheme} eq 'https') ;
-    
-    my $redirs = $arg_maxredirs || $max_redirs;
+
+    $max_redirs = $arg_maxredirs if defined $arg_maxredirs;
+    my $redirs = $max_redirs;
     do {
         my $body = prepare_http_body();
         my $headers = build_http_request_headers($method, $url_final, $url_proxy, $body);
@@ -178,11 +179,11 @@ sub process_http {
         my $code = $resp->{status}{code};
         if ($arg_follow && (300 <= $code) && ($code <= 399)){
             unless($redirs){
-                say STDERR sprintf("Too many redirections (>%d).", $arg_maxredirs || $max_redirs);
+                say STDERR sprintf("* Maximum (%d) redirections followed", $max_redirs);
                 exit 1;
             }
             $url_final = parse_url($resp->{headers}{location});
-            say STDERR sprintf("Redirecting #%d to %s", ($arg_maxredirs || $max_redirs) -  $redirs,  $url_final->{url}) if $arg_verbose || $arg_debug;
+            say STDERR sprintf("* Redirecting #%d to %s", $max_redirs - $redirs,  $url_final->{url}) if $arg_verbose || $arg_debug;
             $redirs--;
         } else {
             goto BREAK;         # weird, 'last' is throwing a warning "Exiting subroutine via last"
