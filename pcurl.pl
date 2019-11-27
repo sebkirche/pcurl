@@ -496,8 +496,8 @@ sub process_http_response {
                     local $/ = "\r\n";
                   HEAD: while(my $line = <$IN>){
                       # $line =~ s/[\r\n]+$//;
-                      print STDOUT '< ' if $arg_verbose;
-                      print STDOUT $line if $arg_verbose || $arg_info;
+                      print STDERR '< ', $line if $arg_verbose;
+                      print STDOUT $line if $arg_info;
                       if ($line =~ s/^[\r\n]+$//){
                           $headers_done++;
                           last HEAD;
@@ -517,7 +517,7 @@ sub process_http_response {
                 # vec($rfd,fileno($fh),1) = 1;
                 # if (select($rfd, undef, undef, 0) >= 0){
                 my $is_redirect = $resp{status}{code} =~ /^3/;
-                say STDERR "Ignoring the response-body" if $is_redirect && (! $fh->eof) && ($arg_verbose || $arg_debug);
+                say STDERR "Ignoring the response-body" if $is_redirect && (! $fh->eof ) && ($arg_verbose || $arg_debug);
                 unless ($fh->eof){
                     $content_length = $headers{'content-length'};
                     $next_chunk_size = $content_length unless $next_chunk_size;
