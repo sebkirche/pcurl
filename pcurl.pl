@@ -17,6 +17,7 @@ our $VERSION = 0.2;
 $|++; # auto flush messages
 $Data::Dumper::Sortkeys = 1;
 
+# -------- Signal handlers -------------------------
 BEGIN{                          # automagic breakpoint for warnings when script is run by perl -d
     $SIG{__WARN__} = sub {
         my $msg = shift;
@@ -26,6 +27,19 @@ BEGIN{                          # automagic breakpoint for warnings when script 
         $DB::single = 1;        # we stop execution if a warning occurs during run
     };
 }
+$SIG{INT}  = sub { say "SIGINT / CTRL-C received (Interrupt from keyboard). Leaving."; exit };
+$SIG{QUIT} = sub { say "SIGQUIT / CTRL-\\ received (Quit from keyboard). Leaving."; exit };
+$SIG{ABRT} = sub { say "SIGABRT received (Probable abnormal process termination requested by a library). Leaving."; exit };
+$SIG{TERM} = sub { say "SIGTERM received - External termination request. Leaving."; exit };
+sub suspend_trap {
+    say "SIGTSTP / CTRL-Z received. Suspending...";
+    $SIG{TSTP} = 'DEFAULT';
+    kill 'TSTP', -(getpgrp $$);
+}
+$SIG{TSTP} = \&suspend_trap;
+$SIG{CONT} = sub { $SIG{TSTP} = \&suspend_trap; say "SIGCONT received - continue after suspension." };
+# --------------------------------------------------
+
 
 my $max_redirs = 20;
 my ($url, $cli_url, $auth_basic, $uagent, $http_vers, $tunnel_pid);
@@ -125,6 +139,8 @@ if ($url->{scheme} =~ /^http/){
     }
     process_stomp($url);
 }
+
+# ------- End of main prog ---------------------------------------------------------------
 
 sub process_http {
     my $method = shift;
@@ -501,7 +517,7 @@ sub process_http_response {
                 # vec($rfd,fileno($fh),1) = 1;
                 # if (select($rfd, undef, undef, 0) >= 0){
                 my $is_redirect = $resp{status}{code} =~ /^3/;
-                say STDERR "Ignoring the response-body" if $is_redirect and $arg_verbose or $arg_debug;
+                say STDERR "Ignoring the response-body" if $is_redirect && (! $fh->eof) && ($arg_verbose || $arg_debug);
                 unless ($fh->eof){
                     $content_length = $headers{'content-length'};
                     $next_chunk_size = $content_length unless $next_chunk_size;
@@ -573,12 +589,14 @@ sub parse_url {
     return $url;
 }
 
+# perform a string encoding compatible with url
 sub urlencode {
     my $s = shift;
     $s =~ s/([^A-Za-z0-9])/sprintf("%%%02X", ord($1))/eg;
     return $s;
 }
 
+# decode an url-encoded string
 sub urldecode {
     my $s = shift;
     $s =~ s/\+/ /g;
@@ -586,12 +604,17 @@ sub urldecode {
     return $s;
 }
 
+# tell if we requested HTTP v0.9
 sub HTTP09 {
     return ($http_vers && $http_vers eq '0.9') ? 1 : undef;
 }
+
+# tell if we requested HTTP v1.0
 sub HTTP10 {
     return ($http_vers && $http_vers eq '1.0') ? 1 : undef;
 }
+
+# tell if we requested HTTP v1.1
 sub HTTP11 {
     return ($http_vers && $http_vers eq '1.1') ? 1 : undef;
 }
