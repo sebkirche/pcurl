@@ -13,7 +13,7 @@ use IO::Socket::INET;
 use IO::Select;
 # use Carp::Always;
 
-our $VERSION = 0.2;
+our $VERSION = 0.5;
 $|++; # auto flush messages
 $Data::Dumper::Sortkeys = 1;
 
@@ -726,7 +726,7 @@ Specify the maximum number of redirects to follow. Default is 20.
 
 Set the url of the HTTP/1.1 proxy to use.
 
-=item -proxy10 <proxy_url>
+=item --proxy10 <proxy_url>
 
 Set the url of the HTTP/1.0 proxy to use.
 
