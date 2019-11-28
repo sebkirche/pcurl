@@ -42,13 +42,13 @@ $SIG{CONT} = sub { $SIG{TSTP} = \&suspend_trap; say "SIGCONT received - continue
 
 
 my $max_redirs = 50; 
-my ($url, $cli_url, $auth_basic, $uagent, $http_vers, $tunnel_pid);
+my ($url, $cli_url, $auth_basic, $uagent, $http_vers, $tunnel_pid, $auto_ref);
 
 my ($arg_hlp, $arg_man, $arg_debug, $arg_verbose,
     $arg_basic, $arg_url, $arg_port, $arg_agent,
     $arg_httpv09, $arg_httpv10, $arg_httpv11,
     $arg_method, $arg_info, $arg_follow, $arg_maxredirs,
-    $arg_proxy, $arg_proxy10, $arg_proxyuser, $arg_noproxy,
+    $arg_proxy, $arg_proxy10, $arg_proxyuser, $arg_noproxy, $arg_referer,
     $arg_postdata, $arg_posturlencode, $arg_postraw, $arg_postbinary,
     $arg_stompdest, $arg_stompmsg) = ();
 my @arg_custom_headers;
@@ -74,6 +74,7 @@ GetOptions(
     'proxy10=s'        => \$arg_proxy10,
     'proxy-user|U=s'   => \$arg_proxyuser,
     'noproxy=s'        => \$arg_noproxy,
+    'referer|e=s'      => \$arg_referer,
     'data|data-ascii|d=s' => \$arg_postdata,
     'data-raw=s'        => \$arg_postraw,
     'data-urlencode=s' => \$arg_posturlencode,
@@ -114,6 +115,11 @@ if ($url->{scheme} =~ /^http/ && $arg_method){
         # send anyway ?
         # die "$arg_method: unknown method\n";
     }
+}
+
+if ($arg_referer =~ /([^;]*)?;auto/){
+    $auto_ref = 1;
+    $arg_referer = $1;
 }
 
 #say STDERR "Url = $url->{url}\nScheme = $url->{scheme}\nAuth = $url->{auth}\nHost = $url->{host}\nPort = $url->{port}\nPath = $url->{path}\nParams = $url->{params}";
@@ -165,7 +171,7 @@ sub process_http {
             if ($pheaders && @$pheaders){
                 send_http_request($IN, $OUT, $ERR, $pheaders);
                 $resp = process_http_response($IN, $ERR);
-                say STDERR sprintf('Proxy returned a code %d: %s', $resp->{code}, $resp->{message}) if $arg_verbose || $arg_debug;
+                say STDERR sprintf('* Proxy returned a code %d: %s', $resp->{code}, $resp->{message}) if $arg_verbose || $arg_debug;
                 exit 1 unless $resp->{code} == 200;
                 $url_final->{tunneled} = 1;
             }
@@ -179,10 +185,11 @@ sub process_http {
         my $code = $resp->{status}{code};
         if ($arg_follow && (300 <= $code) && ($code <= 399)){
             unless($redirs){
-                say STDERR sprintf("* Maximum (%d) redirections followed", $max_redirs);
+                say STDERR sprintf("* Maximum (%d) redirects followed", $max_redirs);
                 exit 1;
             }
             $url_final = parse_url($resp->{headers}{location});
+            $arg_referer = $url_final->{url} if $auto_ref;
             say STDERR sprintf("* Redirecting #%d to %s", $max_redirs - $redirs,  $url_final->{url}) if $arg_verbose || $arg_debug;
             $redirs--;
         } else {
@@ -265,18 +272,21 @@ sub process_stomp_response {
     }
     return \%frame;
 }
+
+# transmission of headers + body to the server
 sub send_http_request {
     my ($IN, $OUT, $ERR, $headers, $body) = @_;
+
+    push @$headers, '';         # empty line to terminate request
     
     if ($arg_verbose){
-        print STDOUT "> $_\n" for @$headers;
+        print STDERR "> $_\n" for @$headers;
     }
-    my $headers_txt = join( "\r\n", @$headers ) . "\r\n";
-    print $OUT $headers_txt;
+    my $headers_txt = join "", map { "$_\r\n" } @$headers;
+    print $OUT $headers_txt;    # send headers to server
 
     if (defined $body){
         my $sent = 0;
-        print $OUT "\r\n";
         if (ref $body eq 'HASH'){
             if (exists $body->{data}){
                 print $OUT $body->{data};
@@ -286,9 +296,7 @@ sub send_http_request {
             print $OUT $body if $body;
             $sent = length $body;
         }
-        say STDOUT "* upload completely sent off: $sent bytes";
-    } else {
-        print $OUT "\r\n";
+        say STDERR "* upload completely sent off: $sent bytes";
     }
     
     $OUT->flush;
@@ -330,6 +338,11 @@ sub get_proxy_settings {
     return $proxy;
 }
 
+# Construct the Request headers using
+# - HTTP method
+# - url we want
+# - url for the proxy
+# - the body (if any, to compute length and content-type)
 sub build_http_request_headers {
     my ($method, $u, $p, $body) = @_;
     my $headers = [];
@@ -366,6 +379,7 @@ sub build_http_request_headers {
         add_http_header($headers, \%custom, 'Proxy-Authorization', 'Basic ' . encode_base64($pauth, '')) if $pauth;
         my $auth = $arg_basic || $u->{auth};
         add_http_header($headers, \%custom, 'Authorization', 'Basic ' . encode_base64($auth, '')) if $auth;
+        add_http_header($headers, \%custom, 'Referer', $arg_referer) if $arg_referer;
         map{ add_http_header($headers, \%custom, $_, $custom{$_}) } keys %custom;
 
         if (defined $body){
@@ -698,6 +712,10 @@ Specify explicitly the port. If not used, we use the port from the url (if speci
 =item -a, --agent <ua string>
 
 Specify a string for User-Agent. If not specified the default User-Agent is 'pcurl v$VERSION'.
+
+=item -e, --referer <referer url>
+
+Specify a string for the referer. If followed by ";auto", when following redirections, reuse the previous url as referer. ";auto" can also be used alone with redirections.
 
 =item -H, --header <header_spec>
 
