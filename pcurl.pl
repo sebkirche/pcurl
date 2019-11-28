@@ -367,20 +367,31 @@ sub build_http_request_headers {
             #           such as -H "X-Custom-Header;" to send "X-Custom-Header:".
             if ($ch =~ /^([A-Za-z0-9-]+)([:;])\s*(.*)$/){
                 # undef will make header removal
-                $custom{lc $1} = ($2 eq ':' && $3) ? $3 : ($2 eq ';') ? '' : undef; 
+                if ($2 eq ':'){
+                    if ($3){
+                        $custom{lc $1} = "$1: $3";
+                    } else {
+                        $custom{lc $1} = undef;
+                    }
+                } elsif ($2 eq ';'){
+                    $custom{lc $1} = "$1:";
+                } else {
+                    say STDERR "* Unsupported syntax for custom header: '$ch' ignored";
+                }
+            } else {
+                say STDERR "* Unsupported syntax for custom header: '$ch' ignored";
             }
         }
         
-        push @$headers, "Host: $u->{host}:$u->{port}";
+        push @$headers, "Host: $u->{host}:$u->{port}" unless exists $custom{host};
         add_http_header($headers, \%custom, 'User-Agent', ${uagent});
         add_http_header($headers, \%custom, 'Accept', '*/*');
-        push @$headers, 'Connection: close';
+        add_http_header($headers, \%custom, 'Connection', 'close');
         my $pauth = $arg_proxyuser || $p->{auth};
         add_http_header($headers, \%custom, 'Proxy-Authorization', 'Basic ' . encode_base64($pauth, '')) if $pauth;
         my $auth = $arg_basic || $u->{auth};
         add_http_header($headers, \%custom, 'Authorization', 'Basic ' . encode_base64($auth, '')) if $auth;
         add_http_header($headers, \%custom, 'Referer', $arg_referer) if $arg_referer;
-        map{ add_http_header($headers, \%custom, $_, $custom{$_}) } keys %custom;
 
         if (defined $body){
             if (ref $body eq 'HASH'){
@@ -393,21 +404,19 @@ sub build_http_request_headers {
                 add_http_header($headers, \%custom, 'Content-type', 'application/x-www-form-urlencoded');
             }
         }
+        map { push @$headers, $custom{$_} if defined $custom{$_} } keys %custom;
     }
     return $headers;
 }
 
+# add a header to the custom headers, depending on existing custom headers (if any)
+# - set to the default value if not in custom headers
 sub add_http_header {
     my ($headers, $custom, $name, $default) = @_;
 
     my $field = lc $name;
-    if (exists $custom->{$field}){
-        my $val = $custom->{$field};
-        if (defined $val){
-            push @$headers, sprintf("%s: %s", $name, $val);
-        }
-    } else {
-        push @$headers, sprintf("%s: %s", $name, $default);
+    if (! exists $custom->{$field} ){
+        $custom->{$field} = "$name: $default";
     }
 }
 
