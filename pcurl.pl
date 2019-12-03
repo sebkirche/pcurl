@@ -56,7 +56,7 @@ my @arg_custom_headers;
 GetOptions(
     'help|h|?'         => \$arg_hlp,
     'man'              => \$arg_man,
-    'debug|d'          => \$arg_debug,
+    'debug'            => \$arg_debug,
     'verbose|v'        => \$arg_verbose,
     'basic=s'          => \$arg_basic,
     'url=s'            => \$arg_url,
@@ -117,12 +117,10 @@ if ($url->{scheme} =~ /^http/ && $arg_method){
     }
 }
 
-if ($arg_referer =~ /([^;]*)?;auto/){
+if ($arg_referer && $arg_referer =~ /([^;]*)?;auto/){
     $auto_ref = 1;
     $arg_referer = $1;
 }
-
-#say STDERR "Url = $url->{url}\nScheme = $url->{scheme}\nAuth = $url->{auth}\nHost = $url->{host}\nPort = $url->{port}\nPath = $url->{path}\nParams = $url->{params}";
 
 if ($url->{scheme} =~ /^http/){
     my $method;
@@ -154,42 +152,58 @@ sub process_http {
 
     my ($IN, $OUT, $ERR, $host, $port, $resp);
 
-    my $url_proxy = get_proxy_settings($url_final);
-    my $pheaders = build_http_proxy_headers($url_proxy, $url_final) if ($url_final->{scheme} eq 'https') ;
-
     $max_redirs = $arg_maxredirs if defined $arg_maxredirs;
     my $redirs = $max_redirs;
     do {
-        my $body = prepare_http_body();
-        my $headers = build_http_request_headers($method, $url_final, $url_proxy, $body);
-
+        say STDERR "* Processing url $url_final->{url}" if $arg_verbose || $arg_debug;
+        my $url_proxy = get_proxy_settings($url_final);
+        my $pheaders = [];
         if ($url_proxy){
-            # FIXME when using OpenSSL and Proxy, we should connect the input/outputs of each other...
-            ($OUT, $IN, $ERR) = connect_direct_socket($url_proxy->{host}, $url_proxy->{port}) if $url_proxy->{scheme} eq 'http';
-            ($OUT, $IN, $ERR) = connect_ssl_tunnel($url_proxy->{host}, $url_proxy->{port}) if $url_proxy->{scheme} eq 'https';
-            $url_final->{proxified} = 1;
-            if ($pheaders && @$pheaders){
-                send_http_request($IN, $OUT, $ERR, $pheaders);
-                $resp = process_http_response($IN, $ERR);
-                say STDERR sprintf('* Proxy returned a code %d: %s', $resp->{code}, $resp->{message}) if $arg_verbose || $arg_debug;
-                exit 1 unless $resp->{code} == 200;
-                $url_final->{tunneled} = 1;
-            }
-        } else {
-            ($OUT, $IN, $ERR) = connect_direct_socket($url_final->{host}, $url_final->{port}) if $url_final->{scheme} eq 'http';
-            ($OUT, $IN, $ERR) = connect_ssl_tunnel($url_final->{host}, $url_final->{port}) if $url_final->{scheme} eq 'https';
+            $pheaders = build_http_proxy_headers($url_proxy, $url_final);
+            $url_final->{proxified} = 1 if $url_final->{scheme} eq 'http';
+            $url_final->{tunneled} = 1 if $url_final->{scheme} eq 'https';
         }
 
+        if ($url_proxy){
+            ($OUT, $IN, $ERR) = connect_direct_socket($url_proxy->{host},
+                                                      $url_proxy->{port}) if $url_final->{scheme} eq 'http';
+            ($OUT, $IN, $ERR) = connect_ssl_tunnel($url_final->{host},
+                                                   $url_final->{port},
+                                                   $url_proxy->{host},
+                                                   $url_proxy->{port}) if $url_final->{scheme} eq 'https';
+        } else {
+            ($OUT, $IN, $ERR) = connect_direct_socket($url_final->{host},
+                                                      $url_final->{port}) if $url_final->{scheme} eq 'http';
+            ($OUT, $IN, $ERR) = connect_ssl_tunnel($url_final->{host},
+                                                   $url_final->{port}) if $url_final->{scheme} eq 'https';
+        }
+
+        my $body = prepare_http_body();
+        my $headers = build_http_request_headers($method, $url_final, $url_proxy, $body);
+        if ($url_final->{proxified} && $pheaders){
+            map { push @$headers, $_ } @$pheaders;
+        }
+
+        say STDERR "* Sending request to server" if $arg_verbose || $arg_debug;
         send_http_request($IN, $OUT, $ERR, $headers, $body);
-        $resp = process_http_response($IN, $ERR);
+        $resp = process_http_response($IN, $ERR, $url_final, $url_proxy);
+        say STDERR "* received $resp->{byte_len} bytes" if $arg_verbose || $arg_debug;
         my $code = $resp->{status}{code};
         if ($arg_follow && (300 <= $code) && ($code <= 399)){
             unless($redirs){
                 say STDERR sprintf("* Maximum (%d) redirects followed", $max_redirs);
                 exit 1;
             }
-            $url_final = parse_url($resp->{headers}{location});
-            $arg_referer = $url_final->{url} if $auto_ref;
+            $arg_referer = $url_final->{url} if $auto_ref;      # use previous url as next referer
+            my ($old_scheme, $old_host, $old_port) = ($url_final->{scheme}, $url_final->{host}, $url_final->{port});
+            $url_final = parse_url($resp->{headers}{location}); # get redirected url
+            # compare new url with previous and reconnected if needed
+            if (($url_final->{scheme} ne $old_scheme) || ($url_final->{host} ne $old_host) || ($url_final->{port} != $old_port)){
+                say STDERR "* Closing connection because of scheme/server redirect" if $arg_verbose || $arg_debug;
+                close $IN;
+                close $OUT;
+                close $ERR if $ERR;
+            }
             say STDERR sprintf("* Redirecting #%d to %s", $max_redirs - $redirs,  $url_final->{url}) if $arg_verbose || $arg_debug;
             $redirs--;
         } else {
@@ -203,80 +217,10 @@ sub process_http {
     close $ERR if $ERR;
 }
 
-sub process_stomp {
-    my $url_final = shift;
-    my ($IN, $OUT, $ERR, $host, $port, $resp);
-    ($OUT, $IN, $ERR) = connect_direct_socket($url_final->{host}, $url_final->{port});
-
-    my ($user, $passwd) = ('guest', 'guest');
-    my $connect = [ 'CONNECT', "login:${user}", "passcode:${passwd}"];
-    send_stomp_request($OUT, $IN, $connect);
-    $resp = process_stomp_response($IN);
-    if ($resp->{command} eq 'CONNECTED'){
-        my $body = $arg_stompmsg;
-        my $len = length($body);
-        my $type = 'text/plain';
-        send_stomp_request($OUT, $IN, [ 'SEND', "destination:$url_final->{path}", "content-type:${type}", "content-length:${len}" ], $body );
-        # this is blocking...
-        $resp = process_stomp_response($IN);
-    }
-    close $IN;
-    close $OUT;
-    close $ERR if $ERR;
-}
-
-sub send_stomp_request {
-    my ($OUT, $IN, $headers, $body) = @_;
-    if ($arg_verbose){
-        say STDOUT "> $_" for @$headers;
-    }
-    my $request = join( "\n", @$headers ) . "\n\n" . ($body || '') . "\000";
-    print $OUT $request;
-}
-
-sub process_stomp_response {
-    my $IN = shift;
-    my $selector = IO::Select->new();
-    $selector->add($IN);
-    my %frame;
-    
-    while (my @ready = $selector->can_read(0.5)) {
-        foreach my $fh (@ready) {
-            if (fileno($fh) == fileno($IN)) {
-                my $buf_size = 1024 * 1024;
-                my $block = $fh->sysread(my $buf, $buf_size);
-                if($block){
-                    if ($buf =~ s/^\n*([^\n].*?)\n\n//s){
-                        my $headers = $1;
-                        for my $line (split /\n/,  $headers){
-                            say STDOUT "< $line" if $arg_verbose || $arg_debug;
-                            if ($line =~ /^(\w+)$/){
-                                $frame{command} = $1;
-                            }
-                            if ($line =~ /^([^:]+):(.*)$/){
-                                $frame{headers}{$1} = $2;
-                            }
-                        }
-                        if ($frame{headers}{'content-length'}){
-                            if (length($buf) > $frame{headers}{'content-length'}){
-                                $frame{body} = substr($buf, 0, $frame{headers}{'content-length'}, '');
-                            }
-                        } elsif ($buf =~ s/^(.*?)\000\n*//s ){
-                            $frame{body} = $1;
-                        }
-                    }
-                }
-                # $selector->remove($fh) if eof($fh);
-            }
-        }
-    }
-    return \%frame;
-}
-
 # transmission of headers + body to the server
 sub send_http_request {
     my ($IN, $OUT, $ERR, $headers, $body) = @_;
-
+    
     push @$headers, '';         # empty line to terminate request
     
     if ($arg_verbose){
@@ -300,8 +244,11 @@ sub send_http_request {
     }
     
     $OUT->flush;
+    say STDERR "* HTTP request sent" if $arg_debug;
 }
 
+# check if we need to connect to a proxy
+# returns the address of the proxy, else undef
 sub get_proxy_settings {
     my $url_final = shift;
     my $proxy;
@@ -334,7 +281,7 @@ sub get_proxy_settings {
         say STDERR "It's strange to me that `$url` does not look as an url for proxy...";
         exit 1;
     }
-    say STDERR "Using proxy $proxy->{url}" if $arg_verbose;
+    say STDERR "* Using proxy $proxy->{url}" if $arg_verbose || $arg_debug;
     return $proxy;
 }
 
@@ -351,11 +298,10 @@ sub build_http_request_headers {
         push @$headers, "${method} $u->{path}", ''; # This is the minimal request (in 0.9)
     } else {
         if ($u->{proxified}){
-            push @$headers, "${method} $u->{url} HTTP/${http_vers}";
+            push @$headers, "${method} $u->{url} HTTP/${http_vers}"; # via a proxy, request full url
         } else {
-            # a proxy tunnel uses CONNECT
             my $path = $u->{path} . ($u->{params} ? "?$u->{params}" : '');
-            push @$headers, "${method} ${path} HTTP/${http_vers}";
+            push @$headers, "${method} ${path} HTTP/${http_vers}"; # else request only the path
         }
 
         # process the custom headers
@@ -387,11 +333,9 @@ sub build_http_request_headers {
         add_http_header($headers, \%custom, 'User-Agent', ${uagent});
         add_http_header($headers, \%custom, 'Accept', '*/*');
         add_http_header($headers, \%custom, 'Connection', 'close');
-        my $pauth = $arg_proxyuser || $p->{auth};
-        add_http_header($headers, \%custom, 'Proxy-Authorization', 'Basic ' . encode_base64($pauth, '')) if $pauth;
         my $auth = $arg_basic || $u->{auth};
         add_http_header($headers, \%custom, 'Authorization', 'Basic ' . encode_base64($auth, '')) if $auth;
-        add_http_header($headers, \%custom, 'Referer', $arg_referer) if $arg_referer;
+        add_http_header($headers, \%custom, 'Referer', $arg_referer) if defined $arg_referer;
 
         if (defined $body){
             if (ref $body eq 'HASH'){
@@ -483,8 +427,6 @@ sub build_http_proxy_headers {
             push @$headers, "CONNECT $u->{host}:$u->{port} HTTP/1.1";
         }
     }
-    push @$headers, "Host: $u->{host}:$u->{port}";
-    push @$headers, "User-Agent: ${uagent}";
     my $auth = $arg_proxyuser || $p->{auth};
     push @$headers, 'Proxy-Authorization: Basic ' . encode_base64($auth) if $auth;
     if (HTTP11()){
@@ -493,13 +435,13 @@ sub build_http_proxy_headers {
     return $headers;
 }
 
+# Given the STDOUT/STDERR of the server or tunnel client
+# process the response
 sub process_http_response {
-    my $IN = shift;
-    my $ERR = shift;
+    my ($IN, $ERR, $url_final, $url_proxy) = @_;
     my $headers_done = 0;
     my $status_done = 0;
     my $content_length = 0;
-    my $next_chunk_size = undef;
     my $received = 0;
     my %headers;
     my %resp;
@@ -508,21 +450,29 @@ sub process_http_response {
     $selector->add($ERR) if $ERR;
     $selector->add($IN);
 
-    while (my @ready = $selector->can_read(1)) {
+    say STDERR "* Processing response" if $arg_debug;
+    
+    while (my @ready = $selector->can_read(0.5)) {
         foreach my $fh (@ready) {
             if ($ERR && (fileno($fh) == fileno($ERR))) {
-                while(my $line = <$fh>){
-                    print STDERR "STDERR: $line" if $arg_debug;
+                my $line = <$fh>;
+                $line =~ s/[\r\n]+$//;
+                say STDERR "* proxy/tunnel STDERR: $line" if $arg_debug;
+                if ($url_final->{tunneled} && ($line =~ /^s_client: HTTP CONNECT failed: (\d+) (.*)/)){
+                    my $err_txt = sprintf("Received '%d %s' from tunnel after CONNECT", $1, $2);
+                    say STDERR $err_txt;
+                    exit 1;
                 }
-            }
-            if (fileno($fh) == fileno($IN)) {
+            } elsif (fileno($fh) == fileno($IN)) {
+                say STDERR "* processing STDIN" if $arg_debug;
                 if (! $headers_done && !HTTP09()){ # there is no header in HTTP/0.9
-                    local $/ = "\r\n";
-                  HEAD: while(my $line = <$IN>){
-                      # $line =~ s/[\r\n]+$//;
-                      print STDERR '< ', $line if $arg_verbose;
-                      print STDOUT $line if $arg_info;
-                      if ($line =~ s/^[\r\n]+$//){
+                    # local $/ = "\r\n";
+                  HEAD: while(defined (my $line = <$IN>)){
+                      $received += length($line);
+                      $line =~ s/[\r\n]+$//;
+                      say STDERR '< ', $line if $arg_verbose || $arg_debug;
+                      say STDOUT $line if $arg_info;
+                      if ($line =~ /^$/){
                           $headers_done++;
                           last HEAD;
                       }
@@ -533,35 +483,136 @@ sub process_http_response {
                           $status_done++;
                       }
                       if ($line =~ /^([A-Za-z0-9-]+):\s*(.*)$/){
-                          $resp{headers}{lc $1} = $2;
+                          $headers{lc $1} = $2;
                       }                            
                   }
                 }
-                # my $rfd;
-                # vec($rfd,fileno($fh),1) = 1;
-                # if (select($rfd, undef, undef, 0) >= 0){
-                my $is_redirect = $resp{status}{code} =~ /^3/;
-                say STDERR "Ignoring the response-body" if $is_redirect && (! $fh->eof ) && ($arg_verbose || $arg_debug);
+                # we show body contents only when not following redirects
+                my $is_redirected = $resp{status} && $resp{status}{code} && $resp{status}{code} =~ /^3/;
+                say STDERR "* Ignoring the response-body" if ($is_redirected && $arg_follow) && (! $fh->eof ) && ($arg_verbose || $arg_debug);
                 unless ($fh->eof){
                     $content_length = $headers{'content-length'};
-                    $next_chunk_size = $content_length unless $next_chunk_size;
+                    if ($content_length){
+                        say STDERR "* need to read $content_length bytes in response..." if $arg_debug;
+                    } else {
+                        say STDERR "* Unknown size of response to read..." if $arg_debug;
+                    }
                     my $buf_size = 2 * 1024 * 1024;
                     my $block = $fh->read(my $buf, $buf_size);
                     if ($block){
-                        say STDERR "Read $block bytes" if $arg_debug;
+                        say STDERR "* Read $block bytes" if $arg_debug;
                         $received += $block;
-                        print STDOUT $buf unless $is_redirect;
+                        print STDOUT $buf unless ($is_redirected && $arg_follow);
                     }
-                    # say STDERR 'Done?' , eof($fh), $received ;
                 }
-                # there may have additional info
+                # there may have additional info... (body > Content-Length)
             };
-            # print STDOUT $_ for <$fh>;
-            # warn "Extra data for fh $fh ?" unless eof($fh) ;
-            $selector->remove($fh) if eof($fh);
+            
+            if (eof($fh)){
+               say STDERR "* Nothing left in the filehandle $fh" if $arg_debug;
+               $selector->remove($fh);
+            }
         }
     }
+    map { $resp{headers}{$_}  = $headers{$_} } keys %headers;
+    $resp{byte_len} = $received; # keep the size of read data
+    say STDERR "* end of response" if $arg_debug;
     return \%resp;
+}
+
+## An non-blocking filehandle read that returns an array of lines read
+## Returns:  ($eof,@lines)
+#my %nonblockGetLines_last;
+#sub nonblockGetLines {
+#    my ($fh,$timeout) = @_;
+#
+#    $timeout = 0 unless defined $timeout;
+#    my $rfd = '';
+#    $nonblockGetLines_last{$fh} = '' unless defined $nonblockGetLines_last{$fh};
+#
+#    vec($rfd,fileno($fh),1) = 1;
+#    return unless select($rfd, undef, undef, $timeout)>=0;
+#    # I'm not sure the following is necessary?
+#    return unless vec($rfd,fileno($fh),1);
+#    my $buf = '';
+#    my $n = sysread($fh,$buf,1024*1024);
+#    # If we're done, make sure to send the last unfinished line
+#    return (1,$nonblockGetLines_last{$fh}) unless $n;
+#    # Prepend the last unfinished line
+#    $buf = $nonblockGetLines_last{$fh}.$buf;
+#    # And save any newly unfinished lines
+#    $nonblockGetLines_last{$fh} = (substr($buf,-1) !~ /[\r\n]/ && $buf =~ s/([^\r\n]*)$//) ? $1 : '';
+#    return $buf ? (0,split(/\n/,$buf)) : (0);
+#}
+
+sub process_stomp {
+    my $url_final = shift;
+    my ($IN, $OUT, $ERR, $host, $port, $resp);
+    ($OUT, $IN, $ERR) = connect_direct_socket($url_final->{host}, $url_final->{port});
+
+    my ($user, $passwd) = ('guest', 'guest');
+    my $connect = [ 'CONNECT', "login:${user}", "passcode:${passwd}"];
+    send_stomp_request($OUT, $IN, $connect);
+    $resp = process_stomp_response($IN);
+    if ($resp->{command} eq 'CONNECTED'){
+        my $body = $arg_stompmsg;
+        my $len = length($body);
+        my $type = 'text/plain';
+        send_stomp_request($OUT, $IN, [ 'SEND', "destination:$url_final->{path}", "content-type:${type}", "content-length:${len}" ], $body );
+        # this is blocking...
+        $resp = process_stomp_response($IN);
+    }
+    close $IN;
+    close $OUT;
+    close $ERR if $ERR;
+}
+
+sub send_stomp_request {
+    my ($OUT, $IN, $headers, $body) = @_;
+    if ($arg_verbose){
+        say STDOUT "> $_" for @$headers;
+    }
+    my $request = join( "\n", @$headers ) . "\n\n" . ($body || '') . "\000";
+    print $OUT $request;
+}
+
+sub process_stomp_response {
+    my $IN = shift;
+    my $selector = IO::Select->new();
+    $selector->add($IN);
+    my %frame;
+    
+    while (my @ready = $selector->can_read(0.5)) {
+        foreach my $fh (@ready) {
+            if (fileno($fh) == fileno($IN)) {
+                my $buf_size = 1024 * 1024;
+                my $block = $fh->sysread(my $buf, $buf_size);
+                if($block){
+                    if ($buf =~ s/^\n*([^\n].*?)\n\n//s){
+                        my $headers = $1;
+                        for my $line (split /\n/,  $headers){
+                            say STDOUT "< $line" if $arg_verbose || $arg_debug;
+                            if ($line =~ /^(\w+)$/){
+                                $frame{command} = $1;
+                            }
+                            if ($line =~ /^([^:]+):(.*)$/){
+                                $frame{headers}{$1} = $2;
+                            }
+                        }
+                        if ($frame{headers}{'content-length'}){
+                            if (length($buf) > $frame{headers}{'content-length'}){
+                                $frame{body} = substr($buf, 0, $frame{headers}{'content-length'}, '');
+                            }
+                        } elsif ($buf =~ s/^(.*?)\000\n*//s ){
+                            $frame{body} = $1;
+                        }
+                    }
+                }
+                # $selector->remove($fh) if eof($fh);
+            }
+        }
+    }
+    return \%frame;
 }
 
 # Extract de differents parts from an URL
@@ -607,8 +658,8 @@ sub parse_url {
     $url->{path} = $+{PATH} || '/';
     $url->{params} = $+{PARAMS} || '';
     if ($arg_debug){
-        say STDERR $given;
-        say(STDERR "$_ = $url->{$_}") for(sort(keys %$url));
+        say STDERR "* Parsed URL '$given'";
+        say(STDERR "*  $_ = $url->{$_}") for(sort(keys %$url));
     }
     return $url;
 }
@@ -657,20 +708,42 @@ sub connect_direct_socket {
                                     PeerPort => $port,
                                     Proto    => 'tcp') or die "Can't connect to $host:$port\n";
     $sock->autoflush(1);
+    say STDERR "* connected to $host:$port" if $arg_verbose || $arg_debug;
     
     return $sock, $sock, undef;
 }
 
 sub connect_ssl_tunnel {
-    my ($host, $port) = @_;
-    my $cmd = "openssl s_client -connect ${host}:${port} -quiet";# -verify_quiet -partial_chain';
+    my ($host, $port, $phost, $pport) = @_;
+    my $cmd = "openssl s_client -connect ${host}:${port} -quiet";# -quiet -verify_quiet -partial_chain';
+    $cmd .= " -proxy ${phost}:${pport}" if $phost;
     $tunnel_pid = open3(*CMD_IN, *CMD_OUT, *CMD_ERR, $cmd);
+    say STDERR "* connected via OpenSSL to $host:$port" if $arg_verbose || $arg_debug;
+    say STDERR "* command = $cmd" if $arg_debug;
 
     $SIG{CHLD} = sub {
-        print STDERR "REAPER: status $? on ${tunnel_pid}\n" if waitpid($tunnel_pid, 0) > 0 && $arg_debug;
+        print STDERR "* REAPER: status $? on ${tunnel_pid}\n" if waitpid($tunnel_pid, 0) > 0 && $arg_debug;
     };
     return *CMD_IN, *CMD_OUT, *CMD_ERR;
 }
+
+# poor man's hex dumper :)
+sub hexdump {
+    my $data = shift;
+    my $data_len = shift || 16;
+    my $hex_len = $data_len * 3;
+    my $addr = 0;
+    my @out;
+    for my $s (unpack("(a${data_len})*", $data)){
+        last unless $s;
+        my $h = join' ', unpack('(H2)*', $s);
+        $s =~ s/[\x00-\x1f]/./g;
+        push @out, sprintf("%06x  %-${hex_len}s %s", $addr, $h, $s);
+        $addr += length($s);
+    }
+    return @out;
+}
+
 
 __END__
 
@@ -748,7 +821,7 @@ Follow HTTP redirects.
 
 =item --max-redirs <nb>
 
-Specify the maximum number of redirects to follow. Default is 20.
+Specify the maximum number of redirects to follow. Default is 50.
 
 =item -x, --proxy <proxy_url>
 
