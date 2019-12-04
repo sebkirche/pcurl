@@ -50,37 +50,38 @@ my ($arg_hlp, $arg_man, $arg_debug, $arg_verbose,
     $arg_method, $arg_info, $arg_follow, $arg_maxredirs,
     $arg_proxy, $arg_proxy10, $arg_proxyuser, $arg_noproxy, $arg_referer,
     $arg_postdata, $arg_posturlencode, $arg_postraw, $arg_postbinary,
-    $arg_stompdest, $arg_stompmsg) = ();
+    $arg_stompdest, $arg_stompmsg, $arg_outfile) = ();
 my @arg_custom_headers;
 
 GetOptions(
-    'help|h|?'         => \$arg_hlp,
-    'man'              => \$arg_man,
-    'debug'            => \$arg_debug,
-    'verbose|v'        => \$arg_verbose,
-    'basic=s'          => \$arg_basic,
-    'url=s'            => \$arg_url,
-    'port|p=i'         => \$arg_port,
-    'agent|a=s'        => \$arg_agent,
-    'header|H=s'       => \@arg_custom_headers,
-    'http09'           => \$arg_httpv09,
-    'http10'           => \$arg_httpv10,
-    'http11'           => \$arg_httpv11,
-    'request|X=s'      => \$arg_method,
-    'head|I'           => \$arg_info,
-    'location|L'       => \$arg_follow,
-    'max-redirs=i'     => \$arg_maxredirs,
-    'proxy|x=s'        => \$arg_proxy,
-    'proxy10=s'        => \$arg_proxy10,
-    'proxy-user|U=s'   => \$arg_proxyuser,
-    'noproxy=s'        => \$arg_noproxy,
-    'referer|e=s'      => \$arg_referer,
+    'agent|a=s'           => \$arg_agent,
+    'basic=s'             => \$arg_basic,
+    'data-binary=s'       => \$arg_postbinary,
+    'data-raw=s'          => \$arg_postraw,
+    'data-urlencode=s'    => \$arg_posturlencode,
     'data|data-ascii|d=s' => \$arg_postdata,
-    'data-raw=s'        => \$arg_postraw,
-    'data-urlencode=s' => \$arg_posturlencode,
-    'data-binary=s'    => \$arg_postbinary,
-    # 'stompdest=s'    => \$arg_stompdest,
-    'stompmsg=s'       => \$arg_stompmsg,
+    'debug'               => \$arg_debug,
+    'header|H=s'          => \@arg_custom_headers,
+    'head|I'              => \$arg_info,
+    'help|h|?'            => \$arg_hlp,
+    'http09'              => \$arg_httpv09,
+    'http10'              => \$arg_httpv10,
+    'http11'              => \$arg_httpv11,
+    'location|L'          => \$arg_follow,
+    'man'                 => \$arg_man,
+    'max-redirs=i'        => \$arg_maxredirs,
+    'noproxy=s'           => \$arg_noproxy,
+    'output|o=s'          => \$arg_outfile,
+    'port|p=i'            => \$arg_port,
+    'proxy-user|U=s'      => \$arg_proxyuser,
+    'proxy10=s'           => \$arg_proxy10,
+    'proxy|x=s'           => \$arg_proxy,
+    'referer|e=s'         => \$arg_referer,
+    'request|X=s'         => \$arg_method,
+    # 'stompdest=s'       => \$arg_stompdest,
+    'stompmsg=s'          => \$arg_stompmsg,
+    'url=s'               => \$arg_url,
+    'verbose|v'           => \$arg_verbose,
     ) or pod2usage(2);
 pod2usage(1) if $arg_hlp;
 pod2usage(-exitval => 0, -verbose => 2) if $arg_man;
@@ -120,6 +121,14 @@ if ($url->{scheme} =~ /^http/ && $arg_method){
 if ($arg_referer && $arg_referer =~ /([^;]*)?;auto/){
     $auto_ref = 1;
     $arg_referer = $1;
+}
+
+my $STDOLD;
+if ($arg_outfile){
+    open $STDOLD, '>&', STDOUT;
+    open STDOUT, '>', $arg_outfile or die "Cannot open $arg_outfile for output.";
+    # later, to restore STDOUT:
+    # open (STDOUT, '>&', $STDOLD);
 }
 
 if ($url->{scheme} =~ /^http/){
@@ -822,6 +831,10 @@ Follow HTTP redirects.
 =item --max-redirs <nb>
 
 Specify the maximum number of redirects to follow. Default is 50.
+
+=item -o, --output <file>
+
+Write to file instead of stdout.
 
 =item -x, --proxy <proxy_url>
 
