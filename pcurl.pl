@@ -762,7 +762,7 @@ pCurl - A minimalist cURL in Perl.
 
 =head1 VERSION
 
-v0.2
+v0.5
 
 =head1 SYNOPSIS
 
@@ -776,65 +776,69 @@ pCurl is a vanilla Perl tool that mimics cURL without external dependancies but 
 
 =over 4
 
-=item -h, --help
+=item -a, --agent <ua string>
 
-Display a short help.
-
-=item --man
-
-Display the full manual.
-
-=item -v, --verbose
-
-Show both headers during the communication.
+Specify a string for User-Agent. If not specified the default User-Agent is 'pcurl v$VERSION'.
 
 =item --basic <user:password>
 
 Use basic http authentication. Sepcified in the form user:password it is passed to the server in Base64 encoding.
 
-=item --url <url>
+=item --d, --data, --data-ascii <data>
 
-Specify explicitly the url. If that parameter is not used, we try to get the url as the remaining text after the parameters.
+Define some data that will be POSTed to the server. If data starts with '@', the rest of the string will be taken as a file name whose content will be send as request body. If using '-' as file name, the data will be read from standard input (so you can pipe it from another command). Note that CR+LF characters will be discarded from the output. See --data-binary if you need to send unaltered data.
 
-=item --port <port>
+=item --data-binary <data>
 
-Specify explicitly the port. If not used, we use the port from the url (if specified), or we will try well-known port 80 for HTTP and 443 for HTTPS, depending on the url scheme.
+Similar to --data, but do not discard CR+LF characters. When reading from a file, perform binary read.
 
-=item -a, --agent <ua string>
+=item --data-raw <data>
 
-Specify a string for User-Agent. If not specified the default User-Agent is 'pcurl v$VERSION'.
+Similar to --data, but do not interpret an initial '@' character.
 
-=item -e, --referer <referer url>
+=item --data-urlencode <data>
 
-Specify a string for the referer. If followed by ";auto", when following redirections, reuse the previous url as referer. ";auto" can also be used alone with redirections.
-
-=item -H, --header <header_spec>
-
-Send an additional header, or change / discard a default one. Usual syntax is -H 'header_name: value', e.g. -H 'X-my-header: some text'. To send several custom headers, repeat the -H parameter. If you pass only 'header_name:' (without value) the header will not be transmitted. If you need to send an empty header, use 'header_name;' (use semicolon).
-
-=item --http09, --http10, --http11
-
-Specify the version of HTTP we want to use. In HTTP/0.9 the only method is GET <url> (without version) and the answer does not return headers, only the body of returned resource. In HTTP/1.0 we can use Host:, Connection: and additional headers. IN HTTP/1.1 the Host: is mandatory and if you do not specify Connection: it is kept open by default. We send automatically a Connection: close by default.
-
-=item -X, --request <method>
-
-Specify the method for the request. Common methods are GET, HEAD, POST, PUT, TRACE, OPTIONS and DELETE, but you can specify a custom method. If not specified, we send a GET. 
+Similar to --data-raw, but the data will be url-encoded.
 
 =item -I, --head
 
 Show the document headers only. The shorthand notation for -X HEAD.
 
+=item -H, --header <header_spec>
+
+Send an additional header, or change / discard a default one. Usual syntax is -H 'header_name: value', e.g. -H 'X-my-header: some text'. To send several custom headers, repeat the -H parameter. If you pass only 'header_name:' (without value) the header will not be transmitted. If you need to send an empty header, use 'header_name;' (use semicolon).
+
+=item -h, --help
+
+Display a short help.
+
+=item --http09, --http10, --http11
+
+Specify the version of HTTP we want to use. In HTTP/0.9 the only method is GET <url> (without version) and the answer does not return headers, only the body of returned resource. In HTTP/1.0 we can use Host:, Connection: and additional headers. IN HTTP/1.1 the Host: is mandatory and if you do not specify Connection: it is kept open by default. We send automatically a Connection: close by default.
+
 =item -L, --location
 
 Follow HTTP redirects.
+
+=item --man
+
+Display the full manual.
 
 =item --max-redirs <nb>
 
 Specify the maximum number of redirects to follow. Default is 50.
 
+=item --noproxy <domain_list>
+
+Define a coma-separated list of domains that ignore the proxy. 
+
 =item -o, --output <file>
 
 Write to file instead of stdout.
+
+=item --port <port>
+
+Specify explicitly the port. If not used, we use the port from the url (if specified), or we will try well-known port 80 for HTTP and 443 for HTTPS, depending on the url scheme.
 
 =item -x, --proxy <proxy_url>
 
@@ -848,29 +852,25 @@ Set the url of the HTTP/1.0 proxy to use.
 
 Set the proxy authentication. Only Basic Auth is supported.
 
-=item --noproxy <domain_list>
+=item -e, --referer <referer url>
 
-Define a coma-separated list of domains that ignore the proxy. 
+Specify a string for the referer. If followed by ";auto", when following redirections, reuse the previous url as referer. ";auto" can also be used alone with redirections.
 
-=item --d, --data, --data-ascii <data>
+=item -X, --request <method>
 
-Define some data that will be POSTed to the server. If data starts with '@', the rest of the string will be taken as a file name whose content will be send as request body. If using '-' as file name, the data will be read from standard input (so you can pipe it from another command). Note that CR+LF characters will be discarded from the output. See --data-binary if you need to send unaltered data.
-
-=item --data-raw <data>
-
-Similar to --data, but do not interpret an initial '@' character.
-
-=item --data-urlencode <data>
-
-Similar to --data-raw, but the data will be url-encoded.
-
-=item --data-binary <data>
-
-Similar to --data, but do not discard CR+LF characters. When reading from a file, perform binary read.
+Specify the method for the request. Common methods are GET, HEAD, POST, PUT, TRACE, OPTIONS and DELETE, but you can specify a custom method. If not specified, we send a GET. 
 
 =item --stompmsg <message>
 
 Content of the message for the STOMP message broker. Use with a stomp://server:port/queuename url. 
+
+=item --url <url>
+
+Specify explicitly the url. If that parameter is not used, we try to get the url as the remaining text after the parameters.
+
+=item -v, --verbose
+
+Show both headers during the communication.
 
 =back
 
