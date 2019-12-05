@@ -48,7 +48,7 @@ my ($url, $cli_url, $auth_basic, $uagent, $http_vers, $tunnel_pid, $auto_ref);
 my ($arg_hlp, $arg_man, $arg_debug, $arg_verbose,
     $arg_basic, $arg_url, $arg_port, $arg_agent,
     $arg_httpv09, $arg_httpv10, $arg_httpv11,
-    $arg_method, $arg_info, $arg_follow, $arg_maxredirs,
+    $arg_method, $arg_info, $arg_follow, $arg_maxredirs, $arg_parse_only,
     $arg_proxy, $arg_proxy10, $arg_proxyuser, $arg_noproxy, $arg_referer,
     $arg_postdata, $arg_posturlencode, $arg_postraw, $arg_postbinary,
     $arg_stompdest, $arg_stompmsg, $arg_outfile) = ();
@@ -73,6 +73,7 @@ GetOptions(
     'max-redirs=i'        => \$arg_maxredirs,
     'noproxy=s'           => \$arg_noproxy,
     'output|o=s'          => \$arg_outfile,
+    'parse-only'          => \$arg_parse_only,
     'port|p=i'            => \$arg_port,
     'proxy-user|U=s'      => \$arg_proxyuser,
     'proxy10=s'           => \$arg_proxy10,
@@ -95,6 +96,14 @@ unless ($cli_url){
 unless ($url = parse_url($cli_url)){
     say STDERR "It's strange to me that `$url` does not look as an url...";
     exit 1;
+}
+if ($arg_parse_only){
+    if ($url){
+        say(STDOUT "$_ = $url->{$_}") for(sort(keys %$url));
+        exit 0;
+    } else {
+        exit 1;
+    }
 }
 
 $uagent = $arg_agent || "pcurl v$VERSION";
@@ -339,7 +348,9 @@ sub build_http_request_headers {
             }
         }
 
-        my $hostport = '';      # we need to pass the port after host only when the port is not the default associated to the protocol
+        # we need to pass the port after host only when the port is not the default associated to the protocol
+        # see RFC2616 §14.23
+        my $hostport = '';      
         if (($u->{scheme} eq 'http') && ($u->{port} != $defports{$u->{scheme}})){
             $hostport = ":$u->{port}";
         }
