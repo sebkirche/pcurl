@@ -338,7 +338,7 @@ sub build_http_request_headers {
             }
         }
         
-        push @$headers, "Host: $u->{host}:$u->{port}" unless exists $custom{host};
+        push @$headers, "Host: $u->{host}" unless exists $custom{host};
         add_http_header($headers, \%custom, 'User-Agent', ${uagent});
         add_http_header($headers, \%custom, 'Accept', '*/*');
         add_http_header($headers, \%custom, 'Connection', 'close');
