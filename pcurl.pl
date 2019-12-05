@@ -40,10 +40,11 @@ $SIG{TSTP} = \&suspend_trap;
 $SIG{CONT} = sub { $SIG{TSTP} = \&suspend_trap; say "SIGCONT received - continue after suspension." };
 # --------------------------------------------------
 
+my $max_redirs = 50;
+my %defports = ( http  => 80,
+                 https => 443 );
 
-my $max_redirs = 50; 
 my ($url, $cli_url, $auth_basic, $uagent, $http_vers, $tunnel_pid, $auto_ref);
-
 my ($arg_hlp, $arg_man, $arg_debug, $arg_verbose,
     $arg_basic, $arg_url, $arg_port, $arg_agent,
     $arg_httpv09, $arg_httpv10, $arg_httpv11,
@@ -337,8 +338,12 @@ sub build_http_request_headers {
                 say STDERR "* Unsupported syntax for custom header: '$ch' ignored";
             }
         }
-        
-        push @$headers, "Host: $u->{host}" unless exists $custom{host};
+
+        my $hostport = '';      # we need to pass the port after host only when the port is not the default associated to the protocol
+        if (($u->{scheme} eq 'http') && ($u->{port} != $defports{$u->{scheme}})){
+            $hostport = ":$u->{port}";
+        }
+        push @$headers, "Host: $u->{host}${hostport}" unless exists $custom{host};
         add_http_header($headers, \%custom, 'User-Agent', ${uagent});
         add_http_header($headers, \%custom, 'Accept', '*/*');
         add_http_header($headers, \%custom, 'Connection', 'close');
