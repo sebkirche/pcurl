@@ -85,7 +85,7 @@ GetOptions(
     'url=s'               => \$arg_url,
     'verbose|v'           => \$arg_verbose,
     ) or pod2usage(2);
-pod2usage(1) if $arg_hlp;
+pod2usage(0) if $arg_hlp;
 pod2usage(-exitval => 0, -verbose => 2) if $arg_man;
 
 $cli_url = $arg_url || $ARGV[0];
