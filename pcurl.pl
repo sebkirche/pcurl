@@ -3,17 +3,18 @@ use warnings;
 use strict;
 use feature 'say';
 use utf8;
-use Getopt::Long qw(:config no_ignore_case bundling);
-use Socket;
-use MIME::Base64 'encode_base64';
 use Data::Dumper;
-use Pod::Usage;
-use IPC::Open3;
-use IO::Socket::INET;
+use Getopt::Long qw(:config no_ignore_case bundling);
 use IO::Select;
+use IO::Socket::INET;
+use IPC::Open3;
+use MIME::Base64 'encode_base64';
+use Pod::Usage;
+use Socket;
+use Time::Local;
 # use Carp::Always;
 
-our $VERSION = 0.5;
+our $VERSION = 0.6;
 $|++; # auto flush messages
 $Data::Dumper::Sortkeys = 1;
 
@@ -40,50 +41,56 @@ $SIG{TSTP} = \&suspend_trap;
 $SIG{CONT} = sub { $SIG{TSTP} = \&suspend_trap; say "SIGCONT received - continue after suspension." };
 # --------------------------------------------------
 
-my $max_redirs = 50;
+my $max_redirs = 50;            # default value for maximum redirects to follow
+my $def_max_wait = 10;          # default value for response timeout
 my %defports = ( http  => 80,
                  https => 443 );
 
-my ($url, $cli_url, $auth_basic, $uagent, $http_vers, $tunnel_pid, $auto_ref);
+my ($url, $cli_url, $auth_basic, $uagent, $http_vers, $tunnel_pid, $auto_ref, $use_cookies, $cookies);
 my ($arg_hlp, $arg_man, $arg_debug, $arg_verbose,
     $arg_basic, $arg_url, $arg_port, $arg_agent,
+    $arg_cookie, $arg_cookiejar, $arg_junk_session_cookies,
     $arg_httpv09, $arg_httpv10, $arg_httpv11,
-    $arg_method, $arg_info, $arg_follow, $arg_maxredirs, $arg_parse_only,
+    $arg_method, $arg_info, $arg_follow, $arg_maxredirs, $arg_maxwait, $arg_parse_only,
     $arg_proxy, $arg_proxy10, $arg_proxyuser, $arg_noproxy, $arg_referer,
     $arg_postdata, $arg_posturlencode, $arg_postraw, $arg_postbinary,
     $arg_stompdest, $arg_stompmsg, $arg_outfile) = ();
 my @arg_custom_headers;
 
 GetOptions(
-    'agent|a=s'           => \$arg_agent,
-    'basic=s'             => \$arg_basic,
-    'data-binary=s'       => \$arg_postbinary,
-    'data-raw=s'          => \$arg_postraw,
-    'data-urlencode=s'    => \$arg_posturlencode,
-    'data|data-ascii|d=s' => \$arg_postdata,
-    'debug'               => \$arg_debug,
-    'header|H=s'          => \@arg_custom_headers,
-    'head|I'              => \$arg_info,
-    'help|h|?'            => \$arg_hlp,
-    'http09'              => \$arg_httpv09,
-    'http10'              => \$arg_httpv10,
-    'http11'              => \$arg_httpv11,
-    'location|L'          => \$arg_follow,
-    'man'                 => \$arg_man,
-    'max-redirs=i'        => \$arg_maxredirs,
-    'noproxy=s'           => \$arg_noproxy,
-    'output|o=s'          => \$arg_outfile,
-    'parse-only'          => \$arg_parse_only,
-    'port|p=i'            => \$arg_port,
-    'proxy-user|U=s'      => \$arg_proxyuser,
-    'proxy10=s'           => \$arg_proxy10,
-    'proxy|x=s'           => \$arg_proxy,
-    'referer|e=s'         => \$arg_referer,
-    'request|X=s'         => \$arg_method,
-    # 'stompdest=s'       => \$arg_stompdest,
-    'stompmsg=s'          => \$arg_stompmsg,
-    'url=s'               => \$arg_url,
-    'verbose|v'           => \$arg_verbose,
+    'agent|a=s'            => \$arg_agent,
+    'basic=s'              => \$arg_basic,
+    'cookie|b=s'           => \$arg_cookie,
+    'cookie-jar|c=s'       => \$arg_cookiejar,
+    'data-binary=s'        => \$arg_postbinary,
+    'data-raw=s'           => \$arg_postraw,
+    'data-urlencode=s'     => \$arg_posturlencode,
+    'data|data-ascii|d=s'  => \$arg_postdata,
+    'debug'                => \$arg_debug,
+    'header|H=s'           => \@arg_custom_headers,
+    'head|I'               => \$arg_info,
+    'help|h|?'             => \$arg_hlp,
+    'http09'               => \$arg_httpv09,
+    'http10'               => \$arg_httpv10,
+    'http11'               => \$arg_httpv11,
+    'junk-session-cookies' => \$arg_junk_session_cookies,
+    'location|L'           => \$arg_follow,
+    'man'                  => \$arg_man,
+    'max-wait=i'           => \$arg_maxwait,
+    'max-redirs=i'         => \$arg_maxredirs,
+    'noproxy=s'            => \$arg_noproxy,
+    'output|o=s'           => \$arg_outfile,
+    'parse-only'           => \$arg_parse_only,
+    'port|p=i'             => \$arg_port,
+    'proxy-user|U=s'       => \$arg_proxyuser,
+    'proxy10=s'            => \$arg_proxy10,
+    'proxy|x=s'            => \$arg_proxy,
+    'referer|e=s'          => \$arg_referer,
+    'request|X=s'          => \$arg_method,
+    # 'stompdest=s'        => \$arg_stompdest,
+    'stompmsg=s'           => \$arg_stompmsg,
+    'url=s'                => \$arg_url,
+    'verbose|v'            => \$arg_verbose,
     ) or pod2usage(2);
 pod2usage(0) if $arg_hlp;
 pod2usage(-exitval => 0, -verbose => 2) if $arg_man;
@@ -133,6 +140,27 @@ if ($arg_referer && $arg_referer =~ /([^;]*)?;auto/){
     $arg_referer = $1;
 }
 
+if ($arg_cookie || $arg_cookiejar){
+    $use_cookies = 1;
+    if ($arg_cookie){
+        if (-f $arg_cookie){
+            $cookies = load_cookie_jar($arg_cookie);
+            say STDERR "Cookies from jar:", Dumper $cookies if $arg_debug;
+            if ($arg_junk_session_cookies){
+                # keep cookies with expiration (if not it's a session cookie)
+                $cookies = [ grep { $_->{expires} } @$cookies ];
+            }
+        } else {
+            $cookies = load_commandline_cookies($arg_cookie);
+            say STDERR "Cookies from command-line:", Dumper $cookies if $arg_debug;
+        }
+    }
+    # keep non-expired cookies
+    my $now = time;
+    $cookies = [ grep { !$_->{expires} || ($_->{expires} >= $now) } @$cookies ];
+    say STDERR "Cookies from jar after purge and expiration:", Dumper $cookies if $arg_debug;
+}
+
 my $STDOLD;
 if ($arg_outfile){
     open $STDOLD, '>&', STDOUT;
@@ -161,6 +189,10 @@ if ($url->{scheme} =~ /^http/){
         exit 1;
     }
     process_stomp($url);
+}
+
+if ($arg_cookiejar){
+    save_cookie_jar($arg_cookiejar, $cookies);
 }
 
 # ------- End of main prog ---------------------------------------------------------------
@@ -206,12 +238,13 @@ sub process_http {
         say STDERR "* Sending request to server" if $arg_verbose || $arg_debug;
         send_http_request($IN, $OUT, $ERR, $headers, $body);
         $resp = process_http_response($IN, $ERR, $url_final, $url_proxy);
+        say STDERR Dumper $resp->{headers} if $arg_debug;
         say STDERR "* received $resp->{byte_len} bytes" if $arg_verbose || $arg_debug;
         my $code = $resp->{status}{code};
         if ($arg_follow && (300 <= $code) && ($code <= 399)){
             unless($redirs){
                 say STDERR sprintf("* Maximum (%d) redirects followed", $max_redirs);
-                exit 1;
+                goto BREAK;
             }
             $arg_referer = $url_final->{url} if $auto_ref;      # use previous url as next referer
             my ($old_scheme, $old_host, $old_port) = ($url_final->{scheme}, $url_final->{host}, $url_final->{port});
@@ -323,6 +356,9 @@ sub build_http_request_headers {
             push @$headers, "${method} ${path} HTTP/${http_vers}"; # else request only the path
         }
 
+        # FIXME: the headers must not be in a hash as we can send repeated headers
+        # when they can be also a coma-separated list https://tools.ietf.org/html/rfc7230#section-3.2.2
+
         # process the custom headers
         my %custom;
         for my $ch (@arg_custom_headers){
@@ -375,6 +411,13 @@ sub build_http_request_headers {
         }
         map { push @$headers, $custom{$_} if defined $custom{$_} } keys %custom;
     }
+
+    # Process Cookies - No more than a single header - https://tools.ietf.org/html/rfc6265#section-5.4
+    if ($use_cookies){
+        my $head = get_matching_cookies($u, $cookies);
+        push @$headers, $head if $head;
+    }    
+
     return $headers;
 }
 
@@ -477,7 +520,7 @@ sub process_http_response {
 
     say STDERR "* Processing response" if $arg_debug;
     
-    while (my @ready = $selector->can_read(0.5)) {
+    while (my @ready = $selector->can_read($arg_maxwait || $def_max_wait)) {
         foreach my $fh (@ready) {
             if ($ERR && (fileno($fh) == fileno($ERR))) {
                 my $line = <$fh>;
@@ -508,7 +551,36 @@ sub process_http_response {
                           $status_done++;
                       }
                       if ($line =~ /^([A-Za-z0-9-]+):\s*(.*)$/){
-                          $headers{lc $1} = $2;
+                          my $hname = lc $1;
+                          my $hvalue = $2;
+                          if ($hname eq 'set-cookie'){
+                              my @head_cookies = parse_cookie_header($hvalue, $url_final);
+                              HCOOKIE: for my $hcook (@head_cookies){
+                                  # replace identical cookies
+                                  for (my $c = 0; $c <= $#{$cookies}; $c++){
+                                      if ($cookies->[$c]->{domain} eq $hcook->{domain} && $cookies->[$c]->{path} eq $hcook->{path}){
+                                          splice @$cookies, $c, 1, $hcook;
+                                          next HCOOKIE;
+                                      }
+                                  }
+                                  # if we arrive here, the cookie was not found, add it
+                                  push @$cookies, $hcook;
+                              }
+                          }
+                          
+                          # http://www.w3.org/Protocols/rfc2616/rfc2616-sec4.html#sec4.2
+                          if (exists $headers{$hname}){
+                              if (ref $headers{$hname} eq 'ARRAY'){
+                                  # already an array ref, add item
+                                  push @{$headers{$hname}}, $hvalue;
+                              } else {
+                                  # replace the single item by an array ref of previous value + new item
+                                  $headers{$hname} = [ $headers{$hname}, $hvalue ];
+                              }
+                          } else {
+                              # most of headers are single values
+                              $headers{$hname} = $hvalue;
+                          }
                       }                            
                   }
                 }
@@ -539,10 +611,176 @@ sub process_http_response {
             }
         }
     }
-    map { $resp{headers}{$_}  = $headers{$_} } keys %headers;
+    $resp{headers} = \%headers;
     $resp{byte_len} = $received; # keep the size of read data
+    say STDERR "Parsed cookies: ", Dumper $cookies if $arg_debug;
     say STDERR "* end of response" if $arg_debug;
     return \%resp;
+}
+
+# Build the value of a Cookie: header containing the cookies
+# suitable for the given url
+sub get_matching_cookies {
+    my ($url, $cookies) = @_;
+    return () unless @$cookies;
+    my $udomain = $url->{host};
+    my $upath = $url->{path};
+    my @matching;
+    for my $cookie (@$cookies){
+        next if $cookie->{secure} && !($url->{scheme} eq 'https'); # secure cookies are only for https
+        my $dom_rx = $cookie->{domain} =~ s/./\\./gr;
+        $dom_rx = "\\b${dom_rx}\$";
+        my $path_rx = '^' . $cookie->{path} . '\b';
+        if (($udomain =~ /$dom_rx/) || ($cookie->{domain} eq '*') && ($upath =~ /$path_rx/)){
+            push @matching, $cookie;
+        }
+    }
+    my $txt = join '; ', map { "$_->{name}=$_->{value}" } @matching;
+    return $txt ? "Cookie: ${txt}" : undef;
+}
+
+# Return the list of cookie definitions contained in a Set-Cookie header
+sub parse_cookie_header {
+    my ($head_val, $url) = @_;
+    my %months = ( Jan=>0, Feb=>1, Mar=>2, Apr=>3, May=>4, Jun=>5, Jul=>6, Aug=>7, Sep=>8, Oct=>9, Nov=>10, Dec=>11 );
+    my $cookies;
+    my $rx = qr{
+    # this regex is a recusrive descent parser - see https://www.perlmonks.org/?node_id=995856
+    # and chapter 1 "Recursive regular expressions" of Mastering Perl (Brian d Foy)
+    (?&LIST) (?{ $_ = $^R->[1] })
+        (?(DEFINE)                      # define some named patterns to call with (?&RULENAME)
+
+         (?<LIST>
+          (?{ [ $^R, [] ] }) # initialize an array ref for the list of cookies
+          (?&COOKIE)           (?{ [ $^R->[0][0], [ $^R->[1] ] ] }) # fill the first cookie in the list
+          (?:
+           \s* , \s* (?&COOKIE) (?{ [ $^R->[0][0], [ @{$^R->[0][1]}, $^R->[1] ] ] }) # append a new cookie to the list
+          )*
+         )
+
+         (?<COOKIE>
+          (?{ [ $^R, {} ] }) # initialize an href for the content of the cookie
+          # at least we have a key=value
+          (?&KV)             (?{ [ $^R->[0][0], { %{ $^R->[0][1] }, name=>$^R->[1], value=>$^R->[2] } ] })
+          ( ; \s    # but we can have additional attributes
+            ( (?&KV)         (?{ [ $^R->[0][0], { %{ $^R->[0][1] }, lc $^R->[1] => $^R->[2] } ] })
+             |(?&SINGLEATTR) (?{ [ $^R->[0][0], { %{ $^R->[0][1] }, lc $^R->[1] => 1 } ] })
+            )
+          )*
+         )
+
+         (?<KV>
+          (?&KEY) = (?&VALUE) (?{ [$^R->[0][0], $^R->[0][1], $^R->[1]] })
+         )
+
+         (?<KEY>
+          ([^;,= ]+ | expires | domain | path) (?{ [ $^R, $^N ] })
+         )
+
+         (?<VALUE>
+          (?: (?&EXPIRES) | (?&STRING) )  
+         )
+
+         (?<EXPIRES>            # legal format = Wdy, DD-Mon-YYYY HH:MM:SS GMT
+          \w\w\w,\s(?<DAY>\d\d)-(?<MONTH>\w\w\w)-(?<YEAR>\d\d\d\d)
+          \s(?<HOUR>\d\d):(?<MINUTE>\d\d):(?<SECOND>\d\d)
+          \s GMT (?{ [ $^R, timelocal( $+{SECOND}, $+{MINUTE}, $+{HOUR}, $+{DAY}, $months{$+{MONTH}}, $+{YEAR} ) ] })
+         )
+
+         (?<STRING>
+          ([^;,]+) (?{ [$^R, $^N] })
+         )
+
+         (?<SINGLEATTR>
+          ( HttpsOnly | Secure )  (?{ [ $^R, $^N ] })
+         )
+        ) # end of DEFINE set
+    }xims;
+    {
+        local $_ = shift;
+        local $^R;
+        eval { m{$rx}; } and $cookies = $_;
+    }
+    return $cookies ? @$cookies : ();
+}
+
+# Load cookies given on the command line
+# we only support one occurrence of the --cookie parameter
+sub load_commandline_cookies {
+    my $arg = shift;
+    my @jar;
+    while ($arg =~ /(\w+)=([^; ]*)/g){
+        my $cookie = {};
+        $cookie->{name} = $1;
+        $cookie->{value} = $2;
+        $cookie->{domain} = '*';
+        $cookie->{path} = '/';
+        push @jar, $cookie;
+    }
+    return \@jar;
+}
+
+# Load cookies from the cookie-jar file
+# The cookie jar is either in Netscape format
+# or in Set-Cookie header format
+sub load_cookie_jar {
+    my $file = shift;
+    my @jar;
+    open my $in, '<', $file or die "Cannot open cookie-jar '$file': $!";
+    my $header_done = 0;
+    while (defined (my $line = <$in>)){
+        chomp $line;
+        # TODO: add the support for http headers format
+        next if $line =~ /^#/ && !$header_done;
+        $header_done++ and next if $line =~ /^$/ && !$header_done;
+        if ($line =~ /^([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)\t([^\t]+)$/){
+            my $cookie = {};
+            $cookie->{tailmatch} = $2 eq 'TRUE';
+            $cookie->{path} = $3;
+            $cookie->{secure} = $4 eq 'TRUE';
+            $cookie->{expires} = $5; # legal format = Wdy, DD-Mon-YYYY HH:MM:SS GMT, if undef, it's a session cookie
+            $cookie->{name} = $6;
+            $cookie->{value} = $7;
+            $cookie->{domain} = $1; # do this as last because of next match that resets the vars $1..$7
+            if ($cookie->{domain} =~ /^#HttpOnly_(.*)/){
+                $cookie->{domain} = $1;
+                $cookie->{httponly} = 1;
+            }
+            push @jar, $cookie;
+        }
+    }
+    close $in;
+    return \@jar;
+}
+
+# Save the cookie in the Netscape format
+# this format is also supported by cURL
+sub save_cookie_jar {
+    my ($file, $cookies) = @_;
+    return unless @$cookies; # emulate curl: do nothing if encountered no cookie
+    my $out;
+    if ($file eq '-'){
+        $out = *STDOUT;
+    } else {
+        open $out, '>', $file or do { say STDERR "* WARNING: failed to save cookies in $file"; return}; # emulate curl
+    }
+    print $out <<HEADER;
+# Netscape HTTP Cookie File
+# https://curl.haxx.se/docs/http-cookies.html
+# This file was generated by $uagent! Edit at your own risk.
+
+HEADER
+    for my $cookie (@$cookies){
+        say $out sprintf ("%s\t%s\t%s\t%s\t%s\t%s\t%s",
+                          $cookie->{httponly} ? '#HttpOnly_' . $cookie->{domain} : $cookie->{domain},
+                          $cookie->{tailmatch} ? 'TRUE' : 'FALSE',
+                          $cookie->{path},
+                          $cookie->{secure} ? 'TRUE' : 'FALSE',
+                          $cookie->{expires} // 0,
+                          $cookie->{name},
+                          $cookie->{value});
+    }
+    close $out unless $file eq '-';
 }
 
 ## An non-blocking filehandle read that returns an array of lines read
@@ -607,7 +845,7 @@ sub process_stomp_response {
     $selector->add($IN);
     my %frame;
     
-    while (my @ready = $selector->can_read(0.5)) {
+    while (my @ready = $selector->can_read($arg_maxwait || $def_max_wait)) {
         foreach my $fh (@ready) {
             if (fileno($fh) == fileno($IN)) {
                 my $buf_size = 1024 * 1024;
@@ -778,7 +1016,7 @@ pCurl - A minimalist cURL in Perl.
 
 =head1 VERSION
 
-v0.5
+v0.6
 
 =head1 SYNOPSIS
 
@@ -799,6 +1037,14 @@ Specify a string for User-Agent. If not specified the default User-Agent is 'pcu
 =item --basic <user:password>
 
 Use basic http authentication. Sepcified in the form user:password it is passed to the server in Base64 encoding.
+
+=item -b, --cookie <string or file>
+
+Activate cookie support and read cookie from a string like 'NAME=Value' or a file. The file is either in 'HTTP headers format' or in 'Netscape cookie format'. See the L<Unofficial cookie FAQ|http://www.cookiecentral.com/faq/#3.5>. The file is never modified. If you want to save cookies, see --cookie-jar.
+
+=item -c, --cookie-jar <file or dash>
+
+Save cookies into a 'Netscape cookie format' file, or if the given file is '-', output the cookies into STDOUT.
 
 =item --d, --data, --data-ascii <data>
 
@@ -832,6 +1078,10 @@ Display a short help.
 
 Specify the version of HTTP we want to use. In HTTP/0.9 the only method is GET <url> (without version) and the answer does not return headers, only the body of returned resource. In HTTP/1.0 we can use Host:, Connection: and additional headers. IN HTTP/1.1 the Host: is mandatory and if you do not specify Connection: it is kept open by default. We send automatically a Connection: close by default.
 
+=item --junk-session-cookies
+
+When using -b, --cookie and loading cookies from file, purge the session cookies (those with no expire date).
+
 =item -L, --location
 
 Follow HTTP redirects.
@@ -840,7 +1090,11 @@ Follow HTTP redirects.
 
 Display the full manual.
 
-=item --max-redirs <nb>
+=item --max-wait <seconds>
+
+Specify the timeout in seconds when waiting for a response. Default is 10s.
+
+=item --max-redirs <number>
 
 Specify the maximum number of redirects to follow. Default is 50.
 
