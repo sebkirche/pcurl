@@ -53,9 +53,10 @@ my ($arg_hlp, $arg_man, $arg_debug, $arg_verbose,
     $arg_httpv09, $arg_httpv10, $arg_httpv11,
     $arg_method, $arg_info, $arg_follow, $arg_maxredirs, $arg_maxwait, $arg_parse_only,
     $arg_proxy, $arg_proxy10, $arg_proxyuser, $arg_noproxy, $arg_referer,
-    $arg_postdata, $arg_posturlencode, $arg_postraw, $arg_postbinary,
+    $arg_postdata, $arg_postraw, $arg_postbinary,
     $arg_stompdest, $arg_stompmsg, $arg_outfile) = ();
 my @arg_custom_headers;
+my @arg_posturlencode;
 
 GetOptions(
     'agent|a=s'            => \$arg_agent,
@@ -64,7 +65,7 @@ GetOptions(
     'cookie-jar|c=s'       => \$arg_cookiejar,
     'data-binary=s'        => \$arg_postbinary,
     'data-raw=s'           => \$arg_postraw,
-    'data-urlencode=s'     => \$arg_posturlencode,
+    'data-urlencode=s'     => \@arg_posturlencode,
     'data|data-ascii|d=s'  => \$arg_postdata,
     'debug'                => \$arg_debug,
     'header|H=s'           => \@arg_custom_headers,
@@ -171,7 +172,7 @@ if ($arg_outfile){
 
 if ($url->{scheme} =~ /^http/){
     my $method;
-    if ($arg_postdata || $arg_posturlencode || $arg_postbinary || $arg_postraw){
+    if ($arg_postdata || @arg_posturlencode || $arg_postbinary || $arg_postraw){
         if ($arg_method && ($arg_method ne 'POST')){
             say STDERR 'For posting data, method must be POST.';
             exit 1;
@@ -292,7 +293,7 @@ sub send_http_request {
             print $OUT $body if $body;
             $sent = length $body;
         }
-        say STDERR "* upload completely sent off: $sent bytes";
+        say STDERR "* upload completely sent off: $sent bytes" if $arg_verbose || $arg_debug;
     }
     
     $OUT->flush;
@@ -476,8 +477,13 @@ sub prepare_http_body{
         } else {
             return $arg_postdata; # it's a plain text 
         }        
-    } elsif ($arg_posturlencode){
-        return urlencode($arg_posturlencode);
+    } elsif (@arg_posturlencode){
+        my @encoded;
+        for my $data (@arg_posturlencode){
+            $data =~ s/^(\w+)=(.*)/"$1=" . urlencode($2)/e;
+            push @encoded, $data;
+        }
+        return join('&', @encoded);
     } else {
         return undef;
     }
@@ -628,7 +634,7 @@ sub get_matching_cookies {
     my @matching;
     for my $cookie (@$cookies){
         next if $cookie->{secure} && !($url->{scheme} eq 'https'); # secure cookies are only for https
-        my $dom_rx = $cookie->{domain} =~ s/./\\./gr;
+        my $dom_rx = $cookie->{domain} =~ s/\./\\./gr;
         $dom_rx = "\\b${dom_rx}\$";
         my $path_rx = '^' . $cookie->{path} . '\b';
         if (($udomain =~ /$dom_rx/) || ($cookie->{domain} eq '*') && ($upath =~ /$path_rx/)){
