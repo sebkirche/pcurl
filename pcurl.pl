@@ -669,19 +669,23 @@ sub parse_cookie_header {
           )*
          )
 
-         (?<KV>
+         (?<KV> # a pair key=value
           (?&KEY) = (?&VALUE) (?{ [$^R->[0][0], $^R->[0][1], $^R->[1]] })
          )
 
-         (?<KEY>
-          ([^;,= ]+ | expires | domain | path) (?{ [ $^R, $^N ] })
+         (?<KEY> # cookie attributes that have a value
+          ( [^;,= ]+ | expires | domain | path | max-age | samesite ) (?{ [ $^R, $^N ] })
          )
 
-         (?<VALUE>
+         (?<SINGLEATTR> # cookie attribute that do not accept value
+          ( HttpOnly | Secure )  (?{ [ $^R, $^N ] })
+         )
+
+         (?<VALUE> # get the value for a key with special handling of dates
           (?: (?&EXPIRES) | (?&STRING) )  
          )
 
-         (?<EXPIRES>            # legal format = Wdy, DD-Mon-YYYY HH:MM:SS GMT
+         (?<EXPIRES> # legal format = Wdy, DD-Mon-YYYY HH:MM:SS GMT
           \w\w\w,\s(?<DAY>\d\d)-(?<MONTH>\w\w\w)-(?<YEAR>\d\d\d\d)
           \s(?<HOUR>\d\d):(?<MINUTE>\d\d):(?<SECOND>\d\d)
           \s GMT (?{ [ $^R, timelocal( $+{SECOND}, $+{MINUTE}, $+{HOUR}, $+{DAY}, $months{$+{MONTH}}, $+{YEAR} ) ] })
@@ -691,15 +695,23 @@ sub parse_cookie_header {
           ([^;,]+) (?{ [$^R, $^N] })
          )
 
-         (?<SINGLEATTR>
-          ( HttpsOnly | Secure )  (?{ [ $^R, $^N ] })
-         )
         ) # end of DEFINE set
     }xims;
     {
         local $_ = shift;
         local $^R;
         eval { m{$rx}; } and $cookies = $_;
+    }
+    if ($cookies){
+        # sanitize cookies: without domain or path, use url current values
+        for my $c (@$cookies){
+            $c->{domain} = $url->{host} unless $c->{domain};
+            $c->{path} = $url->{path} unless $c->{path};
+            if ($c->{'max-age'}){
+                # max-age should always take precedence on Expires (if any)
+                $c->{expires} = time + $c->{'max-age'};
+            }
+        }
     }
     return $cookies ? @$cookies : ();
 }
