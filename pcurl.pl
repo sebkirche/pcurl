@@ -59,7 +59,6 @@ my @arg_custom_headers;
 my @arg_posturlencode;
 
 GetOptions(
-    'agent|a=s'            => \$arg_agent,
     'basic=s'              => \$arg_basic,
     'cookie|b=s'           => \$arg_cookie,
     'cookie-jar|c=s'       => \$arg_cookiejar,
@@ -93,6 +92,7 @@ GetOptions(
     # 'stompdest=s'        => \$arg_stompdest,
     'stompmsg=s'           => \$arg_stompmsg,
     'url=s'                => \$arg_url,
+    'user-agent|A=s'       => \$arg_agent,
     'verbose|v'            => \$arg_verbose,
     ) or pod2usage(2);
 pod2usage(0) if $arg_hlp;
@@ -1059,10 +1059,6 @@ pCurl is a vanilla Perl tool that mimics cURL without external dependancies but 
 
 =over 4
 
-=item -a, --agent <ua string>
-
-Specify a string for User-Agent. If not specified the default User-Agent is 'pcurl v$VERSION'.
-
 =item --basic <user:password>
 
 Use basic http authentication. Sepcified in the form user:password it is passed to the server in Base64 encoding.
@@ -1174,6 +1170,10 @@ Content of the message for the STOMP message broker. Use with a stomp://server:p
 =item --url <url>
 
 Specify explicitly the url. If that parameter is not used, we try to get the url as the remaining text after the parameters.
+
+=item -A, --user-agent <ua string>
+
+Specify a string for User-Agent. If not specified the default User-Agent is 'pcurl v$VERSION'.
 
 =item -v, --verbose
 
