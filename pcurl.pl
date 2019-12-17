@@ -705,9 +705,9 @@ sub parse_cookie_header {
          )
 
          (?<EXPIRES> # legal format = Wdy, DD-Mon-YYYY HH:MM:SS GMT
-          \w\w\w,\s(?<DAY>\d\d)-(?<MONTH>\w\w\w)-(?<YEAR>\d\d\d\d)
+          \w\w\w,\s(?<DAY>\d\d)-(?<MONTH>\w\w\w)-(?<YEAR>(?:\d\d)?\d\d)
           \s(?<HOUR>\d\d):(?<MINUTE>\d\d):(?<SECOND>\d\d)
-          \s GMT (?{ [ $^R, timelocal( $+{SECOND}, $+{MINUTE}, $+{HOUR}, $+{DAY}, $months{$+{MONTH}}, $+{YEAR} ) ] })
+          \s GMT (?{ [ $^R, timelocal( $+{SECOND}, $+{MINUTE}, $+{HOUR}, $+{DAY}, $months{$+{MONTH}}, ($+{YEAR} < 100 ? $+{YEAR} + 2000 : $+{YEAR}) ) ] })
          )
 
          (?<STRING>
