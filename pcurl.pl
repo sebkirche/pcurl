@@ -14,7 +14,7 @@ use Socket;
 use Time::Local;
 # use Carp::Always;
 
-our $VERSION = 0.6;
+our $VERSION = 0.7;
 $|++; # auto flush messages
 $Data::Dumper::Sortkeys = 1;
 
@@ -46,19 +46,20 @@ my $def_max_wait = 10;          # default value for response timeout
 my %defports = ( http  => 80,
                  https => 443 );
 
-my ($url, $cli_url, $auth_basic, $uagent, $http_vers, $tunnel_pid, $auto_ref, $use_cookies, $cookies);
+my ($url, $cli_url, $auth_basic, $uagent, $http_vers, $tunnel_pid, $auto_ref, $use_cookies, $cookies, $process_action);
 my ($arg_hlp, $arg_man, $arg_debug, $arg_verbose,
     $arg_basic, $arg_url, $arg_port, $arg_agent,
     $arg_cookie, $arg_cookiejar, $arg_junk_session_cookies,
     $arg_httpv09, $arg_httpv10, $arg_httpv11, $arg_include, $arg_include_request, 
     $arg_method, $arg_info, $arg_follow, $arg_maxredirs, $arg_maxwait, $arg_parse_only,
-    $arg_proxy, $arg_proxy10, $arg_proxyuser, $arg_noproxy, $arg_referer,
+    $arg_proxy, $arg_proxy10, $arg_proxyuser, $arg_noproxy, $arg_action, $arg_referer,
     $arg_postdata, $arg_postraw, $arg_postbinary,
     $arg_stompdest, $arg_stompmsg, $arg_outfile) = ();
 my @arg_custom_headers;
 my @arg_posturlencode;
 
 GetOptions(
+    'action=s'             => \$arg_action,
     'basic=s'              => \$arg_basic,
     'cookie|b=s'           => \$arg_cookie,
     'cookie-jar|c=s'       => \$arg_cookiejar,
@@ -163,6 +164,10 @@ if ($arg_cookie || $arg_cookiejar){
     say STDERR "Cookies from jar after purge and expiration:", Dumper $cookies if $arg_debug;
 }
 
+if ($arg_action){
+    $process_action = parse_process_action($arg_action);
+}
+
 my $STDOLD;
 if ($arg_outfile){
     open $STDOLD, '>&', STDOUT;
@@ -242,9 +247,12 @@ sub process_http {
 
         # Write to the server
         send_http_request($IN, $OUT, $ERR, $headers, $body);
+        
+        # for some actions we need to capure the output
+        my $need_capture = defined $process_action; # && $process_action->{action} eq 'grep';
 
         # Receive the response
-        $resp = process_http_response($IN, $ERR, $url_final, $url_proxy);
+        $resp = process_http_response($IN, $ERR, $url_final, $url_proxy, $need_capture);
         say STDERR Dumper $resp->{headers} if $arg_debug;
         say STDERR "* received $resp->{byte_len} bytes" if $arg_verbose || $arg_debug;
         if ($resp->{byte_len}){
@@ -270,6 +278,10 @@ sub process_http {
             } else {
                 # result other than redirect
 
+                if ($process_action){
+                    $process_action = perform_action($process_action, $resp);
+                }
+                
                 goto BREAK;         # weird, 'last' is throwing a warning "Exiting subroutine via last"
             }
         }
@@ -524,14 +536,22 @@ sub build_http_proxy_headers {
 # Given the STDOUT/STDERR of the server or tunnel client
 # process the response
 sub process_http_response {
-    my ($IN, $ERR, $url_final, $url_proxy) = @_;
+    my ($IN, $ERR, $url_final, $url_proxy, $need_capture) = @_;
     my $headers_done = 0;
     my $status_done = 0;
     my $content_length = 0;
     my $received = 0;
     my %headers;
     my %resp;
-    
+    my $capture;
+
+    # if we nee to capture the output
+    my $STDOUT_UNCAPTURED;
+    if ($need_capture){
+        open $STDOUT_UNCAPTURED, '>&', STDOUT;
+        close STDOUT;
+        open STDOUT, '>', \$capture or die "Cannot capture output: $!";
+    }
     my $selector = IO::Select->new();
     $selector->add($ERR) if $ERR;
     $selector->add($IN);
@@ -631,6 +651,12 @@ sub process_http_response {
     }
     $resp{headers} = \%headers;
     $resp{byte_len} = $received; # keep the size of read data
+    if ($need_capture){
+        # restore the output to the original value before capture
+        $resp{captured} = \$capture;
+        close STDOUT;
+        open (STDOUT, '>&', $STDOUT_UNCAPTURED);
+    }
     say STDERR "Parsed cookies: ", Dumper $cookies if $arg_debug;
     say STDERR "* end of response" if $arg_debug;
     return \%resp;
@@ -663,8 +689,16 @@ sub parse_cookie_header {
     my %months = ( Jan=>0, Feb=>1, Mar=>2, Apr=>3, May=>4, Jun=>5, Jul=>6, Aug=>7, Sep=>8, Oct=>9, Nov=>10, Dec=>11 );
     my $cookies;
     my $rx = qr{
+    # NOTES:
     # this regex is a recusrive descent parser - see https://www.perlmonks.org/?node_id=995856
     # and chapter 1 "Recursive regular expressions" of Mastering Perl (Brian d Foy)
+    #
+    # Inside the block (?(DEFINE) ...)  (?<FOOBAR> ...) defines a named pattern FOOBAR
+    #                                   that can be called with (?&FOOBAR)
+    # (?{ ... }) is a block of Perl code that is evaluated at the time we reach it while running the pattern
+    # $^R is the value returned by the last runned (?{ }) block
+    # $^N is the last matched group
+
     (?&LIST) (?{ $_ = $^R->[1] })
         (?(DEFINE)                      # define some named patterns to call with (?&RULENAME)
 
@@ -813,31 +847,224 @@ HEADER
     close $out unless $file eq '-';
 }
 
-## An non-blocking filehandle read that returns an array of lines read
-## Returns:  ($eof,@lines)
-#my %nonblockGetLines_last;
-#sub nonblockGetLines {
-#    my ($fh,$timeout) = @_;
-#
-#    $timeout = 0 unless defined $timeout;
-#    my $rfd = '';
-#    $nonblockGetLines_last{$fh} = '' unless defined $nonblockGetLines_last{$fh};
-#
-#    vec($rfd,fileno($fh),1) = 1;
-#    return unless select($rfd, undef, undef, $timeout)>=0;
-#    # I'm not sure the following is necessary?
-#    return unless vec($rfd,fileno($fh),1);
-#    my $buf = '';
-#    my $n = sysread($fh,$buf,1024*1024);
-#    # If we're done, make sure to send the last unfinished line
-#    return (1,$nonblockGetLines_last{$fh}) unless $n;
-#    # Prepend the last unfinished line
-#    $buf = $nonblockGetLines_last{$fh}.$buf;
-#    # And save any newly unfinished lines
-#    $nonblockGetLines_last{$fh} = (substr($buf,-1) !~ /[\r\n]/ && $buf =~ s/([^\r\n]*)$//) ? $1 : '';
-#    return $buf ? (0,split(/\n/,$buf)) : (0);
-#}
+sub parse_process_action {
+    my $param = shift;
+    my $action;
+    if ($param =~ /^(\w+):(.+)/){
+        my $type = $1;
+        my $param = $2;
+        if ($type eq 'header'){
+            $action = { action => 'print', args => { what => 'header', value => $2 } };
+        } elsif ($type eq 'bodyrx'){
+            $action = { action => 'grep', args => { what => 'body', value => $2 } };
+        } elsif ($type eq 'json'){
+            $action = { action => 'print', args => { what => 'json', value => $2 } };
+        }
+    } # else {} parse json
+    say STDERR "Procession action:" . Dumper $action if $arg_debug;
+    return $action;
+}
 
+sub perform_action {
+    my ($action, $resp) = @_;
+    if (lc $action->{action} eq 'print'){
+       if ($action->{args}{what} eq 'header'){
+           say STDOUT $resp->{headers}{lc $action->{args}{value}};
+       } elsif ($action->{args}{what} eq 'json'){
+           my $js = from_json(${$resp->{captured}});
+           my $jp = $action->{args}{value};
+           my $jval = get_jpath($js, $jp);
+           say STDOUT $jval;
+       }
+    } elsif (lc $action->{action} eq 'grep'){
+       if ($action->{args}{what} eq 'body'){
+           if (${$resp->{captured}} =~ /$action->{args}{value}/){
+               say STDOUT $&;
+           }
+       }
+    }
+}
+
+# Return a Perl structure corresponding to a json string
+sub from_json {
+    my $rx = qr{
+    # NOTES:
+    # this regex is a recusrive descent parser - see https://www.perlmonks.org/?node_id=995856
+    # and chapter 1 "Recursive regular expressions" of Mastering Perl (Brian d Foy)
+    #
+    # Inside the block (?(DEFINE) ...)  (?<FOOBAR> ...) defines a named pattern FOOBAR
+    #                                   that can be called with (?&FOOBAR)
+    # (?{ ... }) is a block of Perl code that is evaluated at the time we reach it while running the pattern
+    # $^R is the value returned by the last runned (?{ }) block
+    # $^N is the last matched group
+
+    (?&VALUE) (?{ $_ = $^R->[1] }) # <== entry point of the parser
+    
+    (?(DEFINE) # this does not try to match, it only defines a serie of named patterns
+    
+      (?<VALUE>
+        \s*
+        (
+        (?&OBJECT)
+        |
+        (?&NUMBER)
+        |
+        (?&STRING)
+        |
+        (?&ARRAY)
+        |
+        true  (?{ [$^R, 1] })
+        |
+        false (?{ [$^R, 0] })
+        |
+        null  (?{ [$^R, undef] })
+        )
+        \s*
+      )
+    
+      (?<OBJECT> # will generate a Perl hash
+        (?{ [$^R, {}] })  # init structure
+        \{ # start of object
+          \s*
+          (?: 
+            (?&KV) # [[$^R, {}], $k, $v]   # first pair 
+            (?{ [$^R->[0][0], {$^R->[1] => $^R->[2]}] })
+      
+            (?: # additional pairs 
+            \s* , \s* (?&KV) # [[$^R, {...}], $k, $v]
+              (?{ [$^R->[0][0], {%{ $^R->[0][1]}, $^R->[1] => $^R->[2]}] })
+            )* # additional pairs are optional
+          )? # object may be empty
+        \}  # end of object
+      )
+    
+      (?<KV>  # tuple <key, value>
+        (?&STRING) # [$^R, "string"]
+        \s* : \s* (?&VALUE) # [[$^R, "string"], $value]
+      
+        (?{ [$^R->[0][0], $^R->[0][1], $^R->[1]] })
+      )
+    
+      (?<ARRAY> # will generate a Perl array
+        (?{ [$^R, []] })  # init structure
+        \[ # start of array
+          (?: 
+            (?&VALUE)   # first element 
+            (?{ [$^R->[0][0], [$^R->[1]]] })
+      
+            (?: # aditionnal elements
+            \s* , \s* (?&VALUE) # additional elements
+              (?{ [$^R->[0][0], [@{$^R->[0][1]}, $^R->[1]]] })
+            )* # additional elements are optional
+          )? # array may be empty
+        \] # end of array
+      )
+    
+      (?<STRING>
+        (
+          "
+          (?:
+            [^\\"]+
+          |
+            \\ ["\\bfnrt]  # escaped backspace, form feed, newline, carriage return, tab, \, "
+          |
+            \\ u [0-9a-fA-F]{4} 
+          )*
+          "
+        )
+        (?{ my $s = $^N; 
+            $s =~ s/\\\\u([0-9A-Fa-f]{4})/\\x\{$1\}/g;
+            $s =~ s/@/\\@/g;
+            [ $^R, eval $s ]})
+      )
+    
+      (?<NUMBER>
+        (
+          -?
+          (?: 0 | [1-9]\d* )
+          (?: \. \d+ )?
+          (?: [eE] [-+]? \d+ )?
+        )
+        (?{ [$^R, eval $^N] })
+      )
+    
+    ) #DEFINE
+    }xms;
+    my $struct;
+    {
+        local $_ = shift;
+        local $^R;
+        eval { m{\A$rx\z}; } and $struct = $_;
+    }
+    return $struct;
+}
+
+sub to_json {
+    my $data = shift;
+    # return 'expecting a hashref as input' unless ref $h eq 'HASH';
+
+    my $j;
+    if (!defined $data || $data =~ /null/i){
+        $j = "null";
+    } elsif (ref $data eq 'HASH'){
+        my @items;
+        for my $k (keys %$data){
+            my $v = $data->{$k};
+            my $c = to_json($v);
+            push @items, '"' . $k . '":' . $c;
+        }
+        $j = '{' . join(',', @items) . '}';
+    } elsif (ref $data eq 'ARRAY'){
+        my @items;
+        (push @items, to_json($_)) for @$data;
+        $j = '[' . join(',', @items) . ']';
+    } elsif ($data =~ /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/){
+        $j = eval $&; # $& = last successful match
+    } elsif ($data =~ /true/i){
+        $j = "true";
+    } elsif ($data =~ /false/i){
+        $j = "false";
+    } else {
+        # return a string while escaping some chars
+        $data =~ s/([\\"])/\\$1/g; 
+        $data =~ s/[\n]/\\n/g;
+        $data =~ s/[\r]/\\r/g;
+        $data =~ s/[\b]/\\b/g;
+        $data =~ s/[\f]/\\f/g;
+        $data =~ s/[\t]/\\t/g;
+        $j = '"' . $data . '"';
+    }
+    return $j;
+}
+
+sub get_jpath {
+    my ($ref, $path) = @_;
+    $path = [ split /\//, $path ] unless (ref $path eq 'ARRAY'); # for first call path is not a list
+    print STDERR "Path: " . join(' / ', @$path) . "\n" if $arg_debug;
+    my $p = shift @$path;
+    my $v;
+    if (ref $ref eq 'ARRAY'){
+        if ($p =~ /\[(.*)\]/){
+            die Dumper($ref) . " is not an array ref to access '[$p]'" unless ref $ref eq 'ARRAY';
+            $v = @{$ref}[eval $1];
+            die "eval issue: ".$@ if $@;
+            return get_jpath($v, $path) if @$path;
+        } else {
+            die "Array is not accessible with '$p'" if $p;
+            $v = $ref;
+        }
+    } elsif (ref $ref eq 'HASH'){
+        die Dumper($ref) . "is not a hash ref that contain '$p'" unless exists $ref->{$p};
+        $v = $ref->{$p};
+        return get_jpath($v, $path) if @$path;
+    }
+    if (ref $v){
+        return to_json($v);
+    } else {
+        return $v;
+    }
+}    
+    
 sub process_stomp {
     my $url_final = shift;
     my ($IN, $OUT, $ERR, $host, $port, $resp);
@@ -1058,6 +1285,10 @@ pCurl is a vanilla Perl tool that mimics cURL without external dependancies but 
 =head1 OPTIONS
 
 =over 4
+
+=item --action <spec>
+
+Perform an action on the response. It can be the display of a value (from header, regex on body, json path)
 
 =item --basic <user:password>
 
