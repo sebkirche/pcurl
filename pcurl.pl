@@ -223,15 +223,11 @@ sub process_http {
         if ($url_proxy){
             ($OUT, $IN, $ERR) = connect_direct_socket($url_proxy->{host},
                                                       $url_proxy->{port}) if $url_final->{scheme} eq 'http';
-            ($OUT, $IN, $ERR) = connect_ssl_tunnel($url_final->{host},
-                                                   $url_final->{port},
-                                                   $url_proxy->{host},
-                                                   $url_proxy->{port}) if $url_final->{scheme} eq 'https';
+            ($OUT, $IN, $ERR) = connect_ssl_tunnel($url_final, $url_proxy) if $url_final->{scheme} eq 'https';
         } else {
             ($OUT, $IN, $ERR) = connect_direct_socket($url_final->{host},
                                                       $url_final->{port}) if $url_final->{scheme} eq 'http';
-            ($OUT, $IN, $ERR) = connect_ssl_tunnel($url_final->{host},
-                                                   $url_final->{port}) if $url_final->{scheme} eq 'https';
+            ($OUT, $IN, $ERR) = connect_ssl_tunnel($url_final) if $url_final->{scheme} eq 'https';
         }
 
         my $body = prepare_http_body();
@@ -990,14 +986,6 @@ sub HTTP11 {
 
 sub connect_direct_socket {
     my ($host, $port) = @_;
-    # my $iaddr = inet_aton($host);
-    # my $paddr = sockaddr_in( $port, $iaddr );
-    # my $proto = getprotobyname('tcp');
-    # my $sock;
-    # unless ( socket( $sock, PF_INET, SOCK_STREAM, $proto ) ) {
-    #     die "ERROR : init socket: $!";
-    # }
-    # unless ( connect( $sock, $paddr ) ) { die "no connect: $!\n"; }
     my $sock = new IO::Socket::INET(PeerAddr => $host,
                                     PeerPort => $port,
                                     Proto    => 'tcp') or die "Can't connect to $host:$port\n";
@@ -1008,8 +996,15 @@ sub connect_direct_socket {
 }
 
 sub connect_ssl_tunnel {
-    my ($host, $port, $phost, $pport) = @_;
-    my $cmd = "openssl s_client -connect ${host}:${port} -quiet";# -quiet -verify_quiet -partial_chain';
+    my ($dest, $proxy) = @_;
+    my ($host, $port, $phost, $pport);
+    $host = $dest->{host};
+    $port = $dest->{port};
+    if ($proxy){
+        $phost = $proxy->{host};
+        $pport = $proxy->{port};
+    }
+    my $cmd = "openssl s_client -connect ${host}:${port} -servername ${host} -quiet";# -quiet -verify_quiet -partial_chain';
     $cmd .= " -proxy ${phost}:${pport}" if $phost;
     $tunnel_pid = open3(*CMD_IN, *CMD_OUT, *CMD_ERR, $cmd);
     say STDERR "* connected via OpenSSL to $host:$port" if $arg_verbose || $arg_debug;
