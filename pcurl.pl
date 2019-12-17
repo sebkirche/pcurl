@@ -50,7 +50,7 @@ my ($url, $cli_url, $auth_basic, $uagent, $http_vers, $tunnel_pid, $auto_ref, $u
 my ($arg_hlp, $arg_man, $arg_debug, $arg_verbose,
     $arg_basic, $arg_url, $arg_port, $arg_agent,
     $arg_cookie, $arg_cookiejar, $arg_junk_session_cookies,
-    $arg_httpv09, $arg_httpv10, $arg_httpv11,
+    $arg_httpv09, $arg_httpv10, $arg_httpv11, $arg_include, $arg_include_request, 
     $arg_method, $arg_info, $arg_follow, $arg_maxredirs, $arg_maxwait, $arg_parse_only,
     $arg_proxy, $arg_proxy10, $arg_proxyuser, $arg_noproxy, $arg_referer,
     $arg_postdata, $arg_postraw, $arg_postbinary,
@@ -74,6 +74,8 @@ GetOptions(
     'http09'               => \$arg_httpv09,
     'http10'               => \$arg_httpv10,
     'http11'               => \$arg_httpv11,
+    'include-response|include|i' => \$arg_include,
+    'include-request'      => \$arg_include_request,
     'junk-session-cookies' => \$arg_junk_session_cookies,
     'location|L'           => \$arg_follow,
     'man'                  => \$arg_man,
@@ -290,6 +292,7 @@ sub send_http_request {
     }
     my $headers_txt = join "", map { "$_\r\n" } @$headers;
     print $OUT $headers_txt;    # send headers to server
+    print STDOUT $headers_txt if $arg_include_request;
 
     if (defined $body){
         my $sent = 0;
@@ -554,7 +557,7 @@ sub process_http_response {
                       $received += length($line);
                       $line =~ s/[\r\n]+$//;
                       say STDERR '< ', $line if $arg_verbose || $arg_debug;
-                      say STDOUT $line if $arg_info;
+                      say STDOUT $line if $arg_info || $arg_include;
                       if ($line =~ /^$/){
                           $headers_done++;
                           last HEAD;
@@ -1103,6 +1106,14 @@ Display a short help.
 =item --http09, --http10, --http11
 
 Specify the version of HTTP we want to use. In HTTP/0.9 the only method is GET <url> (without version) and the answer does not return headers, only the body of returned resource. In HTTP/1.0 we can use Host:, Connection: and additional headers. IN HTTP/1.1 the Host: is mandatory and if you do not specify Connection: it is kept open by default. We send automatically a Connection: close by default.
+
+=item -i, --include, --include-response
+
+Include the response headers in the output.
+
+=item --include-request
+
+Include the request headers in the output.
 
 =item --junk-session-cookies
 
