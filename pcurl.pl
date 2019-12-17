@@ -131,8 +131,7 @@ if ($url->{scheme} =~ /^http/ && $arg_method){
         $arg_method = uc $arg_method;
         die "HTTP/0.9 only supports GET method.\n" if $arg_method ne 'GET' and HTTP09();
     } else {
-        # send anyway ?
-        # die "$arg_method: unknown method\n";
+        # Nothing, one can have a custom HTTP method
     }
 }
 
@@ -196,6 +195,11 @@ if ($arg_cookiejar){
     save_cookie_jar($arg_cookiejar, $cookies);
 }
 
+if ($arg_outfile){
+    close STDOUT;
+    open (STDOUT, '>&', $STDOLD);
+}
+
 # ------- End of main prog ---------------------------------------------------------------
 
 sub process_http {
@@ -237,32 +241,41 @@ sub process_http {
         }
 
         say STDERR "* Sending request to server" if $arg_verbose || $arg_debug;
+
+        # Write to the server
         send_http_request($IN, $OUT, $ERR, $headers, $body);
+
+        # Receive the response
         $resp = process_http_response($IN, $ERR, $url_final, $url_proxy);
         say STDERR Dumper $resp->{headers} if $arg_debug;
         say STDERR "* received $resp->{byte_len} bytes" if $arg_verbose || $arg_debug;
-        my $code = $resp->{status}{code};
-        if ($arg_follow && (300 <= $code) && ($code <= 399)){
-            unless($redirs){
-                say STDERR sprintf("* Maximum (%d) redirects followed", $max_redirs);
-                goto BREAK;
+        if ($resp->{byte_len}){
+            my $code = $resp->{status}{code};
+            if ($arg_follow && (300 <= $code) && ($code <= 399)){
+                # if the result is a redirect, follow it
+                unless($redirs){
+                    say STDERR sprintf("* Maximum (%d) redirects followed", $max_redirs);
+                    goto BREAK;
+                }
+                $arg_referer = $url_final->{url} if $auto_ref;      # use previous url as next referer
+                my ($old_scheme, $old_host, $old_port) = ($url_final->{scheme}, $url_final->{host}, $url_final->{port});
+                $url_final = parse_url($resp->{headers}{location}); # get redirected url
+                # compare new url with previous and reconnected if needed
+                if (($url_final->{scheme} ne $old_scheme) || ($url_final->{host} ne $old_host) || ($url_final->{port} != $old_port)){
+                    say STDERR "* Closing connection because of scheme/server redirect" if $arg_verbose || $arg_debug;
+                    close $IN;
+                    close $OUT;
+                    close $ERR if $ERR;
+                }
+                say STDERR sprintf("* Redirecting #%d to %s", $max_redirs - $redirs,  $url_final->{url}) if $arg_verbose || $arg_debug;
+                $redirs--;
+            } else {
+                # result other than redirect
+
+                goto BREAK;         # weird, 'last' is throwing a warning "Exiting subroutine via last"
             }
-            $arg_referer = $url_final->{url} if $auto_ref;      # use previous url as next referer
-            my ($old_scheme, $old_host, $old_port) = ($url_final->{scheme}, $url_final->{host}, $url_final->{port});
-            $url_final = parse_url($resp->{headers}{location}); # get redirected url
-            # compare new url with previous and reconnected if needed
-            if (($url_final->{scheme} ne $old_scheme) || ($url_final->{host} ne $old_host) || ($url_final->{port} != $old_port)){
-                say STDERR "* Closing connection because of scheme/server redirect" if $arg_verbose || $arg_debug;
-                close $IN;
-                close $OUT;
-                close $ERR if $ERR;
-            }
-            say STDERR sprintf("* Redirecting #%d to %s", $max_redirs - $redirs,  $url_final->{url}) if $arg_verbose || $arg_debug;
-            $redirs--;
-        } else {
-            goto BREAK;         # weird, 'last' is throwing a warning "Exiting subroutine via last"
         }
-    } while ($url_final && $redirs >= 0);
+    } while ($resp->{byte_len} && $url_final && $redirs >= 0);
   BREAK:
     
     close $IN;
