@@ -577,7 +577,7 @@ sub process_http_response {
                       $received += length($line);
                       $line =~ s/[\r\n]+$//;
                       say STDERR '< ', $line if $arg_verbose || $arg_debug;
-                      say STDOUT $line if $arg_info || $arg_include;
+                      say STDOUT $line if !$need_capture && $arg_info || $arg_include;
                       if ($line =~ /^$/){
                           $headers_done++;
                           last HEAD;
@@ -653,6 +653,7 @@ sub process_http_response {
     $resp{byte_len} = $received; # keep the size of read data
     if ($need_capture){
         # restore the output to the original value before capture
+        say STDERR sprintf("* Captured %d bytes:\n%s", length $capture, $capture) if $arg_verbose || $arg_debug;
         $resp{captured} = \$capture;
         close STDOUT;
         open (STDOUT, '>&', $STDOUT_UNCAPTURED);
@@ -850,7 +851,7 @@ HEADER
 sub parse_process_action {
     my $param = shift;
     my $action;
-    if ($param =~ /^(\w+):(.+)/){
+    if ($param =~ /^(\w+):(.*)/){
         my $type = $1;
         my $param = $2;
         if ($type eq 'header'){
@@ -872,6 +873,7 @@ sub perform_action {
            say STDOUT $resp->{headers}{lc $action->{args}{value}};
        } elsif ($action->{args}{what} eq 'json'){
            my $js = from_json(${$resp->{captured}});
+           # say Dumper $js;
            my $jp = $action->{args}{value};
            my $jval = get_jpath($js, $jp);
            say STDOUT $jval;
@@ -1045,7 +1047,7 @@ sub get_jpath {
     my $v;
     if (ref $ref eq 'ARRAY'){
         if ($p =~ /\[(.*)\]/){
-            die Dumper($ref) . " is not an array ref to access '[$p]'" unless ref $ref eq 'ARRAY';
+            # die Dumper($ref) . " is not an array ref to access '[$p]'" unless ref $ref eq 'ARRAY';
             $v = @{$ref}[eval $1];
             die "eval issue: ".$@ if $@;
             return get_jpath($v, $path) if @$path;
@@ -1054,9 +1056,13 @@ sub get_jpath {
             $v = $ref;
         }
     } elsif (ref $ref eq 'HASH'){
-        die Dumper($ref) . "is not a hash ref that contain '$p'" unless exists $ref->{$p};
-        $v = $ref->{$p};
-        return get_jpath($v, $path) if @$path;
+        if ($p){
+            die Dumper($ref) . "is not a hash ref that contain '$p'" unless exists $ref->{$p};
+            $v = $ref->{$p};
+            return get_jpath($v, $path) if @$path;
+        } else {
+            $v = $ref;
+        }
     }
     if (ref $v){
         return to_json($v);
