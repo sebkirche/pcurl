@@ -47,7 +47,7 @@ my %defports = ( http  => 80,
                  https => 443 );
 
 my ($url, $cli_url, $auth_basic, $uagent, $http_vers, $tunnel_pid, $auto_ref, $use_cookies, $cookies, $process_action);
-my ($arg_hlp, $arg_man, $arg_debug, $arg_verbose,
+my ($arg_accept, $arg_hlp, $arg_man, $arg_debug, $arg_verbose,
     $arg_basic, $arg_url, $arg_port, $arg_agent,
     $arg_cookie, $arg_cookiejar, $arg_junk_session_cookies,
     $arg_httpv09, $arg_httpv10, $arg_httpv11, $arg_include, $arg_include_request, 
@@ -59,6 +59,7 @@ my @arg_custom_headers;
 my @arg_posturlencode;
 
 GetOptions(
+    'accept=s'             => \$arg_accept,
     'action=s'             => \$arg_action,
     'basic=s'              => \$arg_basic,
     'cookie|b=s'           => \$arg_cookie,
@@ -162,6 +163,10 @@ if ($arg_cookie || $arg_cookiejar){
     my $now = time;
     $cookies = [ grep { !$_->{expires} || ($_->{expires} >= $now) } @$cookies ];
     say STDERR "Cookies from jar after purge and expiration:", Dumper $cookies if $arg_debug;
+}
+
+if ($arg_accept){
+    push @arg_custom_headers, "Accept: ${arg_accept}";
 }
 
 if ($arg_action){
@@ -1291,6 +1296,10 @@ pCurl is a vanilla Perl tool that mimics cURL without external dependancies but 
 =head1 OPTIONS
 
 =over 4
+
+=item --accept <mime type>
+
+Specify an accepted MIME type. This is simply a shortcut for -H 'Accept: your/type'. Default is */*.
 
 =item --action <spec>
 
