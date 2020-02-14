@@ -106,7 +106,7 @@ unless ($cli_url){
     pod2usage(1);
 }
 unless ($url = parse_url($cli_url)){
-    say STDERR "It's strange to me that `$url` does not look as an url...";
+    say STDERR "It's strange to me that `$cli_url` does not look as an url...";
     exit 1;
 }
 if ($arg_parse_only){
@@ -980,7 +980,7 @@ sub from_json {
           "
         )
         (?{ my $s = $^N; 
-            $s =~ s/\\\\u([0-9A-Fa-f]{4})/\\x\{$1\}/g;
+            $s =~ s/\\u([0-9A-Fa-f]{4})/\\x{$1}/g;
             $s =~ s/@/\\@/g;
             [ $^R, eval $s ]})
       )
