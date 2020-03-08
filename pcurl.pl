@@ -1,4 +1,11 @@
 #!/usr/bin/perl
+
+# pCurl - a cURL-like implemented in Perl
+#         with custom features like STOMP message sending
+#         or response processing
+#
+# (c) 2019, 2020 - Sébastien Kirche
+
 use warnings;
 use strict;
 use feature 'say';
@@ -14,7 +21,7 @@ use Socket;
 use Time::Local;
 # use Carp::Always;
 
-our $VERSION = 0.7;
+our $VERSION = 0.7.1;
 $|++; # auto flush messages
 $Data::Dumper::Sortkeys = 1;
 
@@ -84,7 +91,7 @@ GetOptions(
     'max-redirs=i'         => \$arg_maxredirs,
     'noproxy=s'            => \$arg_noproxy,
     'output|o=s'           => \$arg_outfile,
-    'parse-only'           => \$arg_parse_only,
+    'parse-only'           => \$arg_parse_only, # just show how we parse the URL
     'port|p=i'             => \$arg_port,
     'proxy-user|U=s'       => \$arg_proxyuser,
     'proxy10=s'            => \$arg_proxy10,
@@ -106,7 +113,7 @@ unless ($cli_url){
     pod2usage(1);
 }
 unless ($url = parse_url($cli_url)){
-    say STDERR "It's strange to me that `$cli_url` does not look as an url...";
+    say STDERR "It's strange to me that `$cli_url` does not look like an url...";
     exit 1;
 }
 if ($arg_parse_only){
@@ -120,6 +127,7 @@ if ($arg_parse_only){
 
 $uagent = $arg_agent || "pcurl v$VERSION";
 
+# HTTP version
 if ($arg_httpv09){
     $http_vers = '0.9';
 } elsif ($arg_httpv10){
@@ -127,7 +135,7 @@ if ($arg_httpv09){
 } elsif ($arg_httpv11){
     $http_vers = '1.1';
 } elsif ($url->{scheme} =~ /^http/){
-    $http_vers = '1.0';
+    $http_vers = '1.0'; # default HTTP version when not specified
 }
 
 if ($url->{scheme} =~ /^http/ && $arg_method){
@@ -182,6 +190,7 @@ if ($arg_outfile){
 }
 
 if ($url->{scheme} =~ /^http/){
+    # HTTP or HTTPS
     my $method;
     if ($arg_postdata || @arg_posturlencode || $arg_postbinary || $arg_postraw){
         if ($arg_method && ($arg_method ne 'POST')){
@@ -232,6 +241,8 @@ sub process_http {
             $url_final->{tunneled} = 1 if $url_final->{scheme} eq 'https';
         }
 
+        # connect directly a socket to the server or to a proxy
+        # or open a tunnel for HTTPS
         if ($url_proxy){
             ($OUT, $IN, $ERR) = connect_direct_socket($url_proxy->{host},
                                                       $url_proxy->{port}) if $url_final->{scheme} eq 'http';
@@ -542,15 +553,18 @@ sub build_http_proxy_headers {
 # process the response
 sub process_http_response {
     my ($IN, $ERR, $url_final, $url_proxy, $need_capture) = @_;
-    my $headers_done = 0;
-    my $status_done = 0;
-    my $content_length = 0;
-    my $received = 0;
-    my %headers;
-    my %resp;
-    my $capture;
+    my $headers_done = 0;       # flag to know if we are processing headers or body
+    my $status_done = 0;        # flag to know if we have processed the status
+    my $received = 0;           # counter for total bytes received
+    my $content_length = 0;     # size of response, according to the response header
+    my %headers;                # a map for all received headers
+    my %resp;                   # response meta-data
+    my $capture;                # buffer to print response instead of STDOUT
 
-    # if we nee to capture the output
+    # when we receive the server response, we print the result to STDOUT (and possibly the headers)
+    # but when we need to process actions (e.g. for pattern matching) we capture output to a memory buffer
+    
+    # if we need to capture the output, keep the original STDOUT
     my $STDOUT_UNCAPTURED;
     if ($need_capture){
         open $STDOUT_UNCAPTURED, '>&', STDOUT;
@@ -562,7 +576,8 @@ sub process_http_response {
     $selector->add($IN);
 
     say STDERR "* Processing response" if $arg_debug;
-    
+
+    # reading loop on both server output and errors, with a timeout
     while (my @ready = $selector->can_read($arg_maxwait || $def_max_wait)) {
         foreach my $fh (@ready) {
             if ($ERR && (fileno($fh) == fileno($ERR))) {
@@ -588,12 +603,14 @@ sub process_http_response {
                           last HEAD;
                       }
                       if (!$status_done && $line =~ m{^([^\s]+) (\d+) (.*)$}){
+                          # this is the response status
                           $resp{status}{proto} = $1;
                           $resp{status}{code} = $2;
                           $resp{status}{message} = $3;
                           $status_done++;
                       }
                       if ($line =~ /^([A-Za-z0-9-]+):\s*(.*)$/){
+                          # this is a header
                           my $hname = lc $1;
                           my $hvalue = $2;
                           if ($hname eq 'set-cookie'){
@@ -615,9 +632,10 @@ sub process_http_response {
                                   push @$cookies, $hcook;
                               }
                           }
-                          
-                          # http://www.w3.org/Protocols/rfc2616/rfc2616-sec4.html#sec4.2
+
                           if (exists $headers{$hname}){
+                              # header fields can be extended over multiple lines
+                              # http://www.w3.org/Protocols/rfc2616/rfc2616-sec4.html#sec4.2
                               if (ref $headers{$hname} eq 'ARRAY'){
                                   # already an array ref, add item
                                   push @{$headers{$hname}}, $hvalue;
@@ -631,11 +649,11 @@ sub process_http_response {
                           }
                       }                            
                   }
-                }
+                } # end of headers processing
                 # we show body contents only when not following redirects
                 my $is_redirected = $resp{status} && $resp{status}{code} && $resp{status}{code} =~ /^3/;
                 say STDERR "* Ignoring the response-body" if ($is_redirected && $arg_follow) && (! $fh->eof ) && ($arg_verbose || $arg_debug);
-                unless ($fh->eof){
+                unless ($fh->eof){ # loop on the remaining of response
                     $content_length = $headers{'content-length'};
                     if ($content_length){
                         say STDERR "* need to read $content_length bytes in response..." if $arg_debug;
@@ -1241,6 +1259,7 @@ sub HTTP11 {
     return ($http_vers && $http_vers eq '1.1') ? 1 : undef;
 }
 
+# creation of a direct socket connection 
 sub connect_direct_socket {
     my ($host, $port) = @_;
     my $sock = new IO::Socket::INET(PeerAddr => $host,
@@ -1252,6 +1271,7 @@ sub connect_direct_socket {
     return $sock, $sock, undef;
 }
 
+# for HTTPS, we are "cheating" by creating a tunnel with OpenSSL in s_client mode
 sub connect_ssl_tunnel {
     my ($dest, $proxy) = @_;
     my ($host, $port, $phost, $pport);
