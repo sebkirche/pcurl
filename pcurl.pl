@@ -598,15 +598,20 @@ sub process_http_response {
                           my $hvalue = $2;
                           if ($hname eq 'set-cookie'){
                               my @head_cookies = parse_cookie_header($hvalue, $url_final);
+                              say STDERR "Cannot parse cookie header: $hvalue" unless @head_cookies;
                               HCOOKIE: for my $hcook (@head_cookies){
                                   # replace identical cookies
                                   for (my $c = 0; $c <= $#{$cookies}; $c++){
-                                      if ($cookies->[$c]->{domain} eq $hcook->{domain} && $cookies->[$c]->{path} eq $hcook->{path}){
+                                      if ($cookies->[$c]->{domain} eq $hcook->{domain}
+                                          && $cookies->[$c]->{path} eq $hcook->{path}
+                                          && $cookies->[$c]->{name} eq $hcook->{name}){
+                                          say STDERR "Replacing cookie ".$hcook->{name} if $arg_debug;
                                           splice @$cookies, $c, 1, $hcook;
                                           next HCOOKIE;
                                       }
                                   }
                                   # if we arrive here, the cookie was not found, add it
+                                  say STDERR "Adding cookie ".$hcook->{name} if $arg_debug;
                                   push @$cookies, $hcook;
                               }
                           }
@@ -696,7 +701,7 @@ sub parse_cookie_header {
     my $cookies;
     my $rx = qr{
     # NOTES:
-    # this regex is a recusrive descent parser - see https://www.perlmonks.org/?node_id=995856
+    # this regex is a recursive descent parser - see https://www.perlmonks.org/?node_id=995856
     # and chapter 1 "Recursive regular expressions" of Mastering Perl (Brian d Foy)
     #
     # Inside the block (?(DEFINE) ...)  (?<FOOBAR> ...) defines a named pattern FOOBAR
@@ -706,54 +711,63 @@ sub parse_cookie_header {
     # $^N is the last matched group
 
     (?&LIST) (?{ $_ = $^R->[1] })
-        (?(DEFINE)                      # define some named patterns to call with (?&RULENAME)
 
-         (?<LIST>
-          (?{ [ $^R, [] ] }) # initialize an array ref for the list of cookies
-          (?&COOKIE)           (?{ [ $^R->[0][0], [ $^R->[1] ] ] }) # fill the first cookie in the list
-          (?:
-           \s* , \s* (?&COOKIE) (?{ [ $^R->[0][0], [ @{$^R->[0][1]}, $^R->[1] ] ] }) # append a new cookie to the list
-          )*
+    (?(DEFINE)                      # define some named patterns to call with (?&RULENAME)
+    
+      (?<LIST>
+       (?{ [ $^R, [] ] }) # initialize an array ref for the list of cookies
+       (?&COOKIE)           (?{ [ $^R->[0][0], [ $^R->[1] ] ] }) # fill the first cookie in the list
+       (?:
+        \s* , \s* (?&COOKIE) (?{ [ $^R->[0][0], [ @{$^R->[0][1]}, $^R->[1] ] ] }) # append a new cookie to the list
+       )*
+      )
+      
+      (?<COOKIE>
+       (?{ [ $^R, {} ] }) # initialize an href for the content of the cookie
+       # at least we have a key=value
+       (?&KV)             (?{ [ $^R->[0][0], { %{ $^R->[0][1] }, name=>$^R->[1], value=>$^R->[2] } ] })
+       ( ; \s    # but we can have additional attributes
+         ( 
+           (?&SINGLEATTR) (?{ [ $^R->[0][0], { %{ $^R->[0][1] }, lc $^R->[1] => 1 } ] })
+          |(?&KV)         (?{ [ $^R->[0][0], { %{ $^R->[0][1] }, lc $^R->[1] => $^R->[2] } ] })
          )
-
-         (?<COOKIE>
-          (?{ [ $^R, {} ] }) # initialize an href for the content of the cookie
-          # at least we have a key=value
-          (?&KV)             (?{ [ $^R->[0][0], { %{ $^R->[0][1] }, name=>$^R->[1], value=>$^R->[2] } ] })
-          ( ; \s    # but we can have additional attributes
-            ( (?&KV)         (?{ [ $^R->[0][0], { %{ $^R->[0][1] }, lc $^R->[1] => $^R->[2] } ] })
-             |(?&SINGLEATTR) (?{ [ $^R->[0][0], { %{ $^R->[0][1] }, lc $^R->[1] => 1 } ] })
-            )
-          )*
-         )
-
-         (?<KV> # a pair key=value
-          (?&KEY) = (?&VALUE) (?{ [$^R->[0][0], $^R->[0][1], $^R->[1]] })
-         )
-
-         (?<KEY> # cookie attributes that have a value
-          ( [^;,= ]+ | expires | domain | path | max-age | samesite ) (?{ [ $^R, $^N ] })
-         )
-
-         (?<SINGLEATTR> # cookie attribute that do not accept value
-          ( HttpOnly | Secure )  (?{ [ $^R, $^N ] })
-         )
-
-         (?<VALUE> # get the value for a key with special handling of dates
-          (?: (?&EXPIRES) | (?&STRING) )  
-         )
-
-         (?<EXPIRES> # legal format = Wdy, DD-Mon-YYYY HH:MM:SS GMT
-          \w\w\w,\s(?<DAY>\d\d)-(?<MONTH>\w\w\w)-(?<YEAR>(?:\d\d)?\d\d)
-          \s(?<HOUR>\d\d):(?<MINUTE>\d\d):(?<SECOND>\d\d)
-          \s GMT (?{ [ $^R, timelocal( $+{SECOND}, $+{MINUTE}, $+{HOUR}, $+{DAY}, $months{$+{MONTH}}, ($+{YEAR} < 100 ? $+{YEAR} + 2000 : $+{YEAR}) ) ] })
-         )
-
-         (?<STRING>
-          ([^;,]+) (?{ [$^R, $^N] })
-         )
-
-        ) # end of DEFINE set
+       )*
+      )
+      
+      (?<KV> # a pair key=value
+       (?&KEY) = (?&VALUE) (?{ [$^R->[0][0], $^R->[0][1], $^R->[1]] })
+      )
+      
+      (?<KEY> # cookie attributes that have a value
+       ( [^;,= ]+ ) #| expires | domain | path | max-age | samesite ) 
+       (?{ [ $^R, $^N ] })
+      )
+      
+      (?<SINGLEATTR> # cookie attribute that do not accept value
+       ( HttpOnly | Secure )  (?{ [ $^R, $^N ] })
+      )
+      
+      (?<VALUE> # get the value for a key with special handling of dates
+       (?: (?&EXPIRES) | (?&STRING) )
+      )
+      
+      (?<EXPIRES> # legal format = Wdy, DD-Mon-YYYY HH:MM:SS GMT
+                                 # RFC 822, 850, 1036, 1123, with only GMT time zone 
+                                 # and date separators must be dashes
+                                 # but I have seen 
+                                 # Tue, 2 Mar 2021 21:27:55 GMT
+                                 # Tue, 03 Mar 2020 00:27:55 GMT
+       \w\w\w , \s (?<DAY>\d?\d) [- ] (?<MONTH>\w\w\w) [- ] (?<YEAR>(?:\d\d)?\d\d)
+       \s (?<HOUR>\d\d) : (?<MINUTE>\d\d) : (?<SECOND>\d\d) \s GMT 
+       (?{ #printf STDERR "parsed date: %s %s %s %s %s %s\n", $+{SECOND}, $+{MINUTE}, $+{HOUR}, $+{DAY}, $+{MONTH}, $+{YEAR};
+           [ $^R, timelocal( $+{SECOND}, $+{MINUTE}, $+{HOUR}, $+{DAY}, $months{$+{MONTH}}, ($+{YEAR} < 100 ? $+{YEAR} + 2000 : $+{YEAR}) ) ] })
+      )
+      
+      (?<STRING>
+       ([^;,]*) (?{ [$^R, $^N] })
+      )
+    
+    ) # end of DEFINE set
     }xims;
     {
         local $_ = shift;
@@ -761,6 +775,7 @@ sub parse_cookie_header {
         eval { m{$rx}; } and $cookies = $_;
     }
     if ($cookies){
+        say STDERR Dumper $cookies if $arg_debug;
         # sanitize cookies: without domain or path, use url current values
         for my $c (@$cookies){
             $c->{domain} = $url->{host} unless $c->{domain};
@@ -828,6 +843,7 @@ sub load_cookie_jar {
 sub save_cookie_jar {
     my ($file, $cookies) = @_;
     return unless @$cookies; # emulate curl: do nothing if encountered no cookie
+    say STDERR scalar(@$cookies) . " cookie(s) to save in jar $file";
     my $out;
     if ($file eq '-'){
         $out = *STDOUT;
