@@ -21,7 +21,7 @@ use Socket;
 use Time::Local;
 # use Carp::Always;
 
-our $VERSION = 0.7.1;
+our $VERSION = '0.7.1';
 $|++; # auto flush messages
 $Data::Dumper::Sortkeys = 1;
 
@@ -125,7 +125,7 @@ if ($arg_parse_only){
     }
 }
 
-$uagent = $arg_agent || "pcurl v$VERSION";
+$uagent = $arg_agent || "pCurl/$VERSION";
 
 # HTTP version
 if ($arg_httpv09){
