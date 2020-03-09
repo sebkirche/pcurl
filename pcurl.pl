@@ -993,7 +993,7 @@ sub from_json {
             (?&VALUE)   # first element 
             (?{ [$^R->[0][0], [$^R->[1]]] })
       
-            (?: # aditionnal elements
+            (?: # additional elements
             \s* , \s* (?&VALUE) # additional elements
               (?{ [$^R->[0][0], [@{$^R->[0][1]}, $^R->[1]]] })
             )* # additional elements are optional
