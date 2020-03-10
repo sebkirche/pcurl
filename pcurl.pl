@@ -21,7 +21,7 @@ use Socket;
 use Time::Local;
 # use Carp::Always;
 
-our $VERSION = '0.7.1';
+our $VERSION = '0.7.2';
 $|++; # auto flush messages
 $Data::Dumper::Sortkeys = 1;
 
@@ -54,7 +54,7 @@ my %defports = ( http  => 80,
                  https => 443 );
 
 my ($url, $cli_url, $auth_basic, $uagent, $http_vers, $tunnel_pid, $auto_ref, $use_cookies, $cookies, $process_action);
-my ($arg_accept, $arg_hlp, $arg_man, $arg_debug, $arg_verbose,
+my ($arg_accept, $arg_content, $arg_hlp, $arg_man, $arg_debug, $arg_verbose,
     $arg_basic, $arg_url, $arg_port, $arg_agent,
     $arg_cookie, $arg_cookiejar, $arg_junk_session_cookies,
     $arg_httpv09, $arg_httpv10, $arg_httpv11, $arg_include, $arg_include_request, 
@@ -69,6 +69,7 @@ GetOptions(
     'accept=s'             => \$arg_accept,
     'action=s'             => \$arg_action,
     'basic=s'              => \$arg_basic,
+    'content=s'            => \$arg_content,
     'cookie|b=s'           => \$arg_cookie,
     'cookie-jar|c=s'       => \$arg_cookiejar,
     'data-binary=s'        => \$arg_postbinary,
@@ -253,7 +254,7 @@ sub process_http {
             ($OUT, $IN, $ERR) = connect_ssl_tunnel($url_final) if $url_final->{scheme} eq 'https';
         }
 
-        my $body = prepare_http_body();
+        my $body = prepare_http_body_to_post();
         my $headers = build_http_request_headers($method, $url_final, $url_proxy, $body);
         if ($url_final->{proxified} && $pheaders){
             map { push @$headers, $_ } @$pheaders;
@@ -438,16 +439,17 @@ sub build_http_request_headers {
         my $auth = $arg_basic || $u->{auth};
         add_http_header($headers, \%custom, 'Authorization', 'Basic ' . encode_base64($auth, '')) if $auth;
         add_http_header($headers, \%custom, 'Referer', $arg_referer) if defined $arg_referer;
-
+        add_http_header($headers, \%custom, 'Content-Type', $arg_content) if defined $arg_content;
+        
         if (defined $body){
             if (ref $body eq 'HASH'){
                 # if ($body->{kind} eq 'stdin'){
                     add_http_header($headers, \%custom, 'Content-Length', $body->{size});
-                    add_http_header($headers, \%custom, 'Content-type', $body->{ctype});
+                    add_http_header($headers, \%custom, 'Content-type', $body->{ctype}) unless defined $arg_content;
                 # }
             } else {
                 add_http_header($headers, \%custom, 'Content-Length', length $body);
-                add_http_header($headers, \%custom, 'Content-type', 'application/x-www-form-urlencoded');
+                add_http_header($headers, \%custom, 'Content-type', 'application/x-www-form-urlencoded') unless defined $arg_content;
             }
         }
         map { push @$headers, $custom{$_} if defined $custom{$_} } keys %custom;
@@ -473,7 +475,8 @@ sub add_http_header {
     }
 }
 
-sub prepare_http_body{
+# When POSTing data, compute length, content-type and data to POST
+sub prepare_http_body_to_post{
     my $post = $arg_postdata || $arg_postbinary || $arg_postraw;
     if ($post){
         if ($arg_postraw){
@@ -1319,7 +1322,7 @@ pCurl - A minimalist cURL in Perl.
 
 =head1 VERSION
 
-v0.6
+v0.7.2
 
 =head1 SYNOPSIS
 
@@ -1339,11 +1342,15 @@ Specify an accepted MIME type. This is simply a shortcut for -H 'Accept: your/ty
 
 =item --action <spec>
 
-Perform an action on the response. It can be the display of a value (from header, regex on body, json path)
+Perform an action on the response. It can be the display of a value (from header, regex on body, json path).
 
 =item --basic <user:password>
 
 Use basic http authentication. Sepcified in the form user:password it is passed to the server in Base64 encoding.
+
+=item --content <content-type>
+
+Specify the request content-type. This is simply a shortcut for -H 'Content-Type: your/type'. It can overrides automatic content-type for POSTed data.
 
 =item -b, --cookie <string or file>
 
