@@ -1360,7 +1360,7 @@ Activate cookie support and read cookie from a string like 'NAME=Value' or a fil
 
 Save cookies into a 'Netscape cookie format' file, or if the given file is '-', output the cookies into STDOUT.
 
-=item --d, --data, --data-ascii <data>
+=item -d, --data, --data-ascii <data>
 
 Define some data that will be POSTed to the server. If data starts with '@', the rest of the string will be taken as a file name whose content will be send as request body. If using '-' as file name, the data will be read from standard input (so you can pipe it from another command). Note that CR+LF characters will be discarded from the output. See --data-binary if you need to send unaltered data.
 
