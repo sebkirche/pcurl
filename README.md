@@ -139,3 +139,11 @@ Options
 
     -v, --verbose
         Show both headers during the communication.
+
+Return codes
+------------
+
+0 : No error
+1 : no URL / wrong URL (does not parse the URL syntax)
+2 : unknown option
+3 : url stomp:// without --stompmsg parameter

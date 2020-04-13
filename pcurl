@@ -21,9 +21,10 @@ use Socket;
 use Time::Local;
 # use Carp::Always;
 
-our $VERSION = '0.7.2';
+our $VERSION = '0.7.3';
 $|++; # auto flush messages
 $Data::Dumper::Sortkeys = 1;
+$Data::Dumper::Indent   = 2;
 
 # -------- Signal handlers -------------------------
 BEGIN{                          # automagic breakpoint for warnings when script is run by perl -d
@@ -104,14 +105,14 @@ GetOptions(
     'url=s'                => \$arg_url,
     'user-agent|A=s'       => \$arg_agent,
     'verbose|v'            => \$arg_verbose,
-    ) or pod2usage(2);
-pod2usage(0) if $arg_hlp;
+    ) or pod2usage(-exitval => 2, -verbose => 0);
+pod2usage(-exitval => 0, -verbose => 1) if $arg_hlp;
 pod2usage(-exitval => 0, -verbose => 2) if $arg_man;
 
 $cli_url = $arg_url || $ARGV[0];
 unless ($cli_url){
     say STDERR "No url provided...";
-    pod2usage(1);
+    pod2usage(-exitval => 1);
 }
 unless ($url = parse_url($cli_url)){
     say STDERR "It's strange to me that `$cli_url` does not look like an url...";
@@ -194,12 +195,7 @@ if ($url->{scheme} =~ /^http/){
     # HTTP or HTTPS
     my $method;
     if ($arg_postdata || @arg_posturlencode || $arg_postbinary || $arg_postraw){
-        if ($arg_method && ($arg_method ne 'POST')){
-            say STDERR 'For posting data, method must be POST.';
-            exit 1;
-        } else {
-            $method = 'POST';
-        }
+        $method = $arg_method || 'POST';
     } else {
         $method = $arg_info ? 'HEAD' : $arg_method || 'GET';
     }
@@ -208,7 +204,7 @@ if ($url->{scheme} =~ /^http/){
 } elsif ($url->{scheme} =~ /^stomp/){
     unless ($url->{path} && $arg_stompmsg){
         say STDERR "Message sending with --stompmsg <message> is supported for now.";
-        exit 1;
+        exit 3;
     }
     process_stomp($url);
 }
@@ -373,7 +369,7 @@ sub get_proxy_settings {
     $proxy = parse_url($proxy_set);
     unless ($proxy){
         say STDERR "It's strange to me that `$url` does not look as an url for proxy...";
-        exit 1;
+        exit 4;
     }
     say STDERR "* Using proxy $proxy->{url}" if $arg_verbose || $arg_debug;
     return $proxy;
@@ -590,7 +586,7 @@ sub process_http_response {
                 if ($url_final->{tunneled} && ($line =~ /^s_client: HTTP CONNECT failed: (\d+) (.*)/)){
                     my $err_txt = sprintf("Received '%d %s' from tunnel after CONNECT", $1, $2);
                     say STDERR $err_txt;
-                    exit 1;
+                    exit 5;
                 }
             } elsif (fileno($fh) == fileno($IN)) {
                 say STDERR "* processing STDIN" if $arg_debug;
@@ -1322,7 +1318,7 @@ pCurl - A minimalist cURL in Perl.
 
 =head1 VERSION
 
-v0.7.2
+v0.7.3
 
 =head1 SYNOPSIS
 
