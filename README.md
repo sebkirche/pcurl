@@ -140,6 +140,17 @@ Options
     -v, --verbose
         Show both headers during the communication.
 
+Actions
+-------
+
+To simplify some post-processing on the retrieved resources, you can specify an action to be performed on the result.
+Action can be of type:
+
+* print: display a response header value, or a json response attribute
+** `pcurl --action=header:server http://free.fr` => `nginx`
+** `pcurl https://jsonplaceholder.typicode.com/users/1 --action='json:id'` 
+* regex: display the match of a regex on the response body
+
 Return codes
 ------------
 
@@ -147,3 +158,5 @@ Return codes
 1 : no URL / wrong URL (does not parse the URL syntax)
 2 : unknown option
 3 : url stomp:// without --stompmsg parameter
+4 : no URL / wrong URL for proxy (does not parse the URL syntax)
+5 : HTTP CONNECT failed for tunnel

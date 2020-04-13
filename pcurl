@@ -109,51 +109,17 @@ GetOptions(
 pod2usage(-exitval => 0, -verbose => 1) if $arg_hlp;
 pod2usage(-exitval => 0, -verbose => 2) if $arg_man;
 
-$cli_url = $arg_url || $ARGV[0];
-unless ($cli_url){
-    say STDERR "No url provided...";
-    pod2usage(-exitval => 1);
-}
-unless ($url = parse_url($cli_url)){
-    say STDERR "It's strange to me that `$cli_url` does not look like an url...";
-    exit 1;
-}
-if ($arg_parse_only){
-    if ($url){
-        say(STDOUT "$_ = $url->{$_}") for(sort(keys %$url));
-        exit 0;
-    } else {
-        exit 1;
-    }
-}
-
+# User-Agent
 $uagent = $arg_agent || "pCurl/$VERSION";
 
-# HTTP version
-if ($arg_httpv09){
-    $http_vers = '0.9';
-} elsif ($arg_httpv10){
-    $http_vers = '1.0';
-} elsif ($arg_httpv11){
-    $http_vers = '1.1';
-} elsif ($url->{scheme} =~ /^http/){
-    $http_vers = '1.0'; # default HTTP version when not specified
-}
-
-if ($url->{scheme} =~ /^http/ && $arg_method){
-    if ($arg_method =~ /^(GET|HEAD|POST|PUT|TRACE|OPTIONS|DELETE)$/i){
-        $arg_method = uc $arg_method;
-        die "HTTP/0.9 only supports GET method.\n" if $arg_method ne 'GET' and HTTP09();
-    } else {
-        # Nothing, one can have a custom HTTP method
-    }
-}
-
+# Referer provided, or auto-referer?
+# auto-referer is: take the url of the previous url as referer when following redirects 
 if ($arg_referer && $arg_referer =~ /([^;]*)?;auto/){
     $auto_ref = 1;
     $arg_referer = $1;
 }
 
+# Cookies
 if ($arg_cookie || $arg_cookiejar){
     $use_cookies = 1;
     if ($arg_cookie){
@@ -175,14 +141,18 @@ if ($arg_cookie || $arg_cookiejar){
     say STDERR "Cookies from jar after purge and expiration:", Dumper $cookies if $arg_debug;
 }
 
+# shortcut to -H 'Accept: mime'
 if ($arg_accept){
     push @arg_custom_headers, "Accept: ${arg_accept}";
 }
 
+# Action is either a specific value to extract from the result (header, json field)
+# an can be more sophisticated actions
 if ($arg_action){
     $process_action = parse_process_action($arg_action);
 }
 
+# if we want to output in a file, redirect the initial STDOUT
 my $STDOLD;
 if ($arg_outfile){
     open $STDOLD, '>&', STDOUT;
@@ -191,8 +161,47 @@ if ($arg_outfile){
     # open (STDOUT, '>&', $STDOLD);
 }
 
+$cli_url = $arg_url || $ARGV[0];
+unless ($cli_url){
+    say STDERR "No url provided...";
+    pod2usage(-exitval => 1);
+}
+unless ($url = parse_url($cli_url)){
+    say STDERR "It's strange to me that `$cli_url` does not look like an url...";
+    exit 1;
+}
+if ($arg_parse_only){
+    if ($url){
+        say(STDOUT "$_ = $url->{$_}") for(sort(keys %$url));
+        exit 0;
+    } else {
+        exit 1;
+    }
+}
+
 if ($url->{scheme} =~ /^http/){
     # HTTP or HTTPS
+
+    # version
+    if ($arg_httpv09){
+        $http_vers = '0.9';
+    } elsif ($arg_httpv10){
+        $http_vers = '1.0';
+    } elsif ($arg_httpv11){
+        $http_vers = '1.1';
+    } else {
+        $http_vers = '1.0'; # default HTTP version when not specified
+    }
+
+    if ($arg_method){
+        if ($arg_method =~ /^(GET|HEAD|POST|PUT|TRACE|OPTIONS|DELETE)$/i){
+            $arg_method = uc $arg_method;
+            die "HTTP/0.9 only supports GET method.\n" if $arg_method ne 'GET' and HTTP09();
+        } else {
+            # Nothing, one can have a custom HTTP method
+        }
+    }
+
     my $method;
     if ($arg_postdata || @arg_posturlencode || $arg_postbinary || $arg_postraw){
         $method = $arg_method || 'POST';
@@ -209,10 +218,12 @@ if ($url->{scheme} =~ /^http/){
     process_stomp($url);
 }
 
+# save the cookie jar if requested
 if ($arg_cookiejar){
     save_cookie_jar($arg_cookiejar, $cookies);
 }
 
+# close out file and restore STDOUT
 if ($arg_outfile){
     close STDOUT;
     open (STDOUT, '>&', $STDOLD);
@@ -227,7 +238,7 @@ sub process_http {
     my ($IN, $OUT, $ERR, $host, $port, $resp);
 
     $max_redirs = $arg_maxredirs if defined $arg_maxredirs;
-    my $redirs = $max_redirs;
+    my $redirs = $max_redirs;   # redirs is a countdown of remaining allowed redirections
     do {
         say STDERR "* Processing url $url_final->{url}" if $arg_verbose || $arg_debug;
         my $url_proxy = get_proxy_settings($url_final);
@@ -886,6 +897,7 @@ HEADER
     close $out unless $file eq '-';
 }
 
+# prepare the action handler(s)
 sub parse_process_action {
     my $param = shift;
     my $action;
@@ -904,24 +916,25 @@ sub parse_process_action {
     return $action;
 }
 
+# Do something with the retrieved resource
 sub perform_action {
     my ($action, $resp) = @_;
     if (lc $action->{action} eq 'print'){
-       if ($action->{args}{what} eq 'header'){
-           say STDOUT $resp->{headers}{lc $action->{args}{value}};
-       } elsif ($action->{args}{what} eq 'json'){
-           my $js = from_json(${$resp->{captured}});
-           # say Dumper $js;
-           my $jp = $action->{args}{value};
-           my $jval = get_jpath($js, $jp);
-           say STDOUT $jval;
-       }
+        if ($action->{args}{what} eq 'header'){
+            say STDOUT $resp->{headers}{lc $action->{args}{value}};
+        } elsif ($action->{args}{what} eq 'json'){
+            my $js = from_json(${$resp->{captured}});
+            # say Dumper $js;
+            my $jp = $action->{args}{value};
+            my $jval = get_jpath($js, $jp);
+            say STDOUT $jval;
+        }
     } elsif (lc $action->{action} eq 'grep'){
-       if ($action->{args}{what} eq 'body'){
-           if (${$resp->{captured}} =~ /$action->{args}{value}/){
-               say STDOUT $&;
-           }
-       }
+        if ($action->{args}{what} eq 'body'){
+            if (${$resp->{captured}} =~ /$action->{args}{value}/){
+                say STDOUT $&;
+            }
+        }
     }
 }
 
