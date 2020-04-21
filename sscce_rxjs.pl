@@ -22,10 +22,9 @@ sub TRACE_JSON {0}
 
 sub eval_json_string {
     my $s = shift;
-    # $s =~ s/\\u([0-9A-Fa-f]{4})/\\x{$1}/g;
-    # $s =~ s/@/\\@/g;
-    # return eval $s;
-    return $s;
+    $s =~ s/\\u([0-9A-Fa-f]{4})/\\x{$1}/g;
+    $s =~ s/@/\\@/g;
+    return eval $s;
 }
 
 my @eval_stack;
@@ -43,6 +42,7 @@ sub from_json {
     my $l = 0;                  # indent level
     say "Initial stack is ", Dumper(\@eval_stack) if TRACE_JSON;
     my $rx = qr{
+
     # NOTES:
     # this regex is a recusrive descent parser - see https://www.perlmonks.org/?node_id=995856
     # and chapter 1 "Recursive regular expressions" of Mastering Perl (Brian d Foy)
@@ -55,98 +55,107 @@ sub from_json {
     # $^N is the last matched (non-anonymous) group
 
     (?&VALUE) (?{ $_ = pop_val() }) # <== entry point of the parser
-    
+
     (?(DEFINE) # this does not try to match, it only defines a serie of named patterns
-    
-      (?<OBJECT> # will generate a Perl hash
-        \{ # start of object 
-          (?{ push_val({}); }) # init structure
-          \s*+
-          (?: 
-            (?&KV) # first pair 
-            (?{ say($i x $l,'first object pair ', Dumper([ peek_val(-2),peek_val(-1)])) if TRACE_JSON; my $v = pop_val(); my $k = pop_val(); add_obj_val($k, $v); })
-      
-            (?: # additional pairs 
-            \s*+ , \s*+ (?&KV)
-              (?{ say($i x $l,'additional object pair ', Dumper([ peek_val(-2),peek_val(-1) ])) if TRACE_JSON; my $v = pop_val(); my $k = pop_val(); add_obj_val($k, $v), })
-            )* # additional pairs are optional
-          )? # object may be empty
-        \s*+ \}  # end of object
+
+     (?<VALUE>
+      \s*+
+      (
+      (?&STRING)
+      |
+      (?&NUMBER)
+      |
+      (?&OBJECT)
+      |
+      (?&ARRAY)
+      |
+      true (?{ push_val(1) })
+      |
+      false (?{ push_val(0) })
+      |
+      null (?{ push_val(undef) })
       )
-    
-      (?<KV>  # tuple <key, value>
-        (?{ say $i x $l,'tuple rule' if TRACE_JSON; $l++; })
-        (?&STRING) \s*+ : \s*+ (?&VALUE)
-      
-        (?{ $l--; say($i x $l,'->have tuple ', Dumper([peek_val(-2),peek_val(-1)]) ) if TRACE_JSON; })
-      )
-    
-      (?<ARRAY> # will generate a Perl array
-        \[ \s*+ # start of array 
-          (?{ push_val([]); }) # init structure
-          (?: 
-            (?&VALUE)   # first element 
-            (?{ say($i x $l,'first array item ', peek_val(-1)) if TRACE_JSON; my $v = pop_val(); add_arr_val( $v ) })
-      
-            (?: # additional elements
-            \s*+ , \s*+ (?&VALUE) # additional elements
-              (?{ say($i x $l,'additional array item ', peek_val(-1)) if TRACE_JSON; add_arr_val( pop_val() ) })
-            )* # additional elements are optional
-          )? # array may be empty
-        \s*+ \] # end of array (?{ say $i x $l,'->array: ',Dumper(\@eval_stack) })
-      )
-    
-      (?<VALUE> (?{ say $i x $l++,'Value?' if TRACE_JSON })
-        \s*+
-        (
-        (?{ say $i x $l,'try string' if TRACE_JSON; }) (?&STRING)
-        |
-        (?{ say $i x $l,'try number' if TRACE_JSON; }) (?&NUMBER) (?{ say $i x $l,'post number' if TRACE_JSON })
-        |
-        (?{ say $i x $l,'try object' if TRACE_JSON; $l++; }) (?&OBJECT)
-        |
-        (?{ say $i x $l,'try array'  if TRACE_JSON; $l++; }) (?&ARRAY) (?{ $l-- })
-        |
-        (?{ say $i x $l,'try true'  if TRACE_JSON; }) true  (?{ say $i x $l,'->true' if TRACE_JSON; push_val(1) })
-        |
-        (?{ say $i x $l,'try false'  if TRACE_JSON; }) false (?{ say $i x $l,'->false' if TRACE_JSON; push_val(0) })
-        |
-        (?{ say $i x $l,'try null'  if TRACE_JSON; }) null  (?{ say $i x $l,'->null' if TRACE_JSON; push_val(undef) })
-        ) 
-        \s*+ (?{ $l--; say ($i x $l,'->have value: ', Dumper(peek_val)) if TRACE_JSON; })
-      )
-    
-      (?<STRING> (?{ say $i x $l,'string rule' if TRACE_JSON;$^R })
-        (
-          "
-          (?:
-            [^\\"]++
-          |
-            \\ ["\\/bfnrt]  # escaped backspace, form feed, newline, carriage return, tab, \, "
-#          |
-#            \\ u [0-9a-fA-F]{4} 
-          )*+
-          "
-        )
-        (?{ 
-            my $v = $^N; #eval_json_string($^N); 
-            say $i x $l,"->have string '$v'" if TRACE_JSON;
-            push_val($v) })
-      )
-    
-      (?<NUMBER> (?{ say $i x $l,'number rule' if TRACE_JSON;$^R })
-        (
-          -?
-          (?: 0 | [1-9]\d*+ )
-          (?: \. \d+ )?
-          (?: [eE] [-+]? \d+ )?
-        )
-        (?{ my $v = eval $^N;
-            say $i x $l,"->have number $v" if TRACE_JSON; 
-            push_val($v); })
-      )
-    
-    ) #DEFINE
+      \s*+
+     )
+
+     (?<OBJECT> # will generate a Perl hash
+       \{ # start of object 
+         (?{ push_val({}); }) # init structure
+         \s*+
+         (?: 
+           (?&KV) # first pair
+           (?{ 
+               my $v = pop_val(); my $k = pop_val(); add_obj_val($k, $v);
+           })
+           (?: # additional pairs 
+             \s* , \s* (?&KV)
+             (?{ 
+                 my $v = pop_val(); my $k = pop_val(); add_obj_val($k, $v);
+             })
+           )* # additional pairs are optional
+         )? # object may be empty
+         \s*+ 
+       \}
+     )
+
+     (?<KV> # tuple <key, value>
+       (?&STRING) \s*+ : \s*+ (?&VALUE)
+       (?{
+
+       })
+     )
+
+     (?<ARRAY> # will generate a Perl array
+       \[ 
+         (?{ push_val([]); }) # init structure
+         \s*+
+         (?: # first element 
+           (?&VALUE) 
+           (?{  my $v = pop_val(); add_arr_val( $v )
+           })
+           (?: # additional elements
+             \s*+ , \s*+ (?&VALUE) 
+             (?{
+                 my $v = pop_val(); add_arr_val( $v )
+             })
+           )*  # additional elements are optional
+         )? # array may be empty
+         \s*+ 
+       \]  # end of array
+     )
+
+     (?<STRING>
+       (
+         "
+         (?:
+           [^\\"]+
+           |
+           \\ ["\\/bfnrt]
+           |
+           \\ u [0-9a-fA-f]{4}
+         )*+
+         "
+       )
+
+       (?{ 
+            my $v = eval_json_string($^N); 
+            push_val($v);
+       })
+     )
+
+     (?<NUMBER>
+       (
+         -?
+         (?: 0 | [1-9]\d*+ )
+         (?: \. \d+ )?
+         (?: [eE] [-+]? \d+ )?
+       )
+       (?{ 
+           my $v = eval $^N;
+           push_val($v);
+       })
+     )
+    ) #End of DEFINE
     }xms;
     my $struct;
     {
