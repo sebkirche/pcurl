@@ -10,6 +10,7 @@ use warnings;
 use strict;
 use feature 'say';
 use utf8;
+use open ':std', ':encoding(UTF-8)';
 use Data::Dumper;
 use Getopt::Long qw(:config no_ignore_case bundling);
 use IO::Select;
@@ -118,7 +119,7 @@ if ($arg_debugjson){
     }
     
     my $obj = from_json($arg_debugjson);
-    say Dumper $obj;
+    say Data::Dumper->Dump([$obj],[ 'json' ]);
     exit 0;
 }
 
@@ -955,6 +956,21 @@ sub TRACE_JSON {
     return $arg_debugjson ? 1 : 0;
 }
 
+my @eval_stack; my $trace_indent = 0;
+sub json_trace  { say ' ' x $trace_indent, @_ if TRACE_JSON}
+sub dump_stack  { json_trace $_ for ("stack is -----", scalar(@eval_stack) . ' =>' . Dumper(\@eval_stack), '-----') }
+sub push_val    { push @eval_stack, shift; }
+sub peek_val    { my @idx = @_; @idx=(-1) unless @idx; return @eval_stack[ @idx ]; }
+sub pop_val     { return pop @eval_stack; }
+sub add_obj_val { my ($k,$v) = @_; $eval_stack[-1]->{$k} = $v; }
+sub add_arr_val { my $v = shift; push @{$eval_stack[-1]}, $v; }
+sub eval_json_string {
+    my $s = shift;
+    $s =~ s/\\u([0-9A-Fa-f]{4})/\\x{$1}/g;
+    $s =~ s/@/\\@/g;
+    return eval $s;
+}
+
 # Return a Perl structure corresponding to a json string
 sub from_json {
     my $rx = qr{
@@ -968,70 +984,90 @@ sub from_json {
     # $^R is the value returned by the last runned (?{ }) block
     # $^N is the last matched group
 
-    (?&VALUE) (?{ $_ = $^R->[1] }) # <== entry point of the parser
+    (?&VALUE) (?{ $_ = pop_val() }) # <== entry point of the parser
     
     (?(DEFINE) # this does not try to match, it only defines a serie of named patterns
     
-      (?<VALUE> (?{ say 'value?' if TRACE_JSON;$^R })
-        \s*
+      (?<VALUE> (?{ json_trace 'value?' })
+        \s*+
         (
-        (?{ say 'try object' if TRACE_JSON;$^R }) (?&OBJECT)
-        |
-        (?{ say 'try number' if TRACE_JSON;$^R }) (?&NUMBER) (?{ say 'post number' if TRACE_JSON;$^R })
-        |
-        (?{ say 'try string' if TRACE_JSON;$^R }) (?&STRING)
-        |
-        (?{ say 'try array'  if TRACE_JSON;$^R }) (?&ARRAY)
-        |
-        true  (?{ say '->true' if TRACE_JSON; [$^R, 1] })
-        |
-        false (?{ say '->false' if TRACE_JSON; [$^R, 0] })
-        |
-        null  (?{ say '->null' if TRACE_JSON; [$^R, undef] })
-        ) (?{ say 'post value alternatives' if TRACE_JSON;$^R })
-        \s* (?{ say 'end of value' if TRACE_JSON;$^R })
+         (?{ $trace_indent++; })
+         (?&STRING)
+         |
+         (?&NUMBER)
+         |
+         true  (?{ push_val(1); json_trace '->true' })
+         |
+         false (?{ push_val(0); json_trace '->false' })
+         |
+         null  (?{ push_val(undef); json_trace '->null' })
+         |
+         (?&ARRAY)
+         |
+         (?&OBJECT)
+        )
+        \s*+
+        (?{ $trace_indent--; })
+        (?{ json_trace '->value'; dump_stack() if TRACE_JSON })
       )
     
       (?<OBJECT> # will generate a Perl hash
-        (?{ [$^R, {}] })  # init structure
+        (?{ json_trace "try object" })
         \{ # start of object
-          \s*
+          (?{ push_val({}); $trace_indent++; })  # init structure
+          \s*+
           (?: 
-            (?&KV) # [[$^R, {}], $k, $v]   # first pair 
-            (?{ say('first object pair ', Dumper($^R)) if TRACE_JSON; [$^R->[0][0], {$^R->[1] => $^R->[2]}] })
-      
+            (?&KV) # first pair
+            (?{ 
+               my $v = pop_val(); my $k = pop_val(); add_obj_val($k, $v);
+               json_trace '->pair';
+            })      
             (?: # additional pairs 
-            \s* , \s* (?&KV) # [[$^R, {...}], $k, $v]
-              (?{ say('additional object pair ', Dumper($^R)) if TRACE_JSON; [$^R->[0][0], {%{ $^R->[0][1]}, $^R->[1] => $^R->[2]}] })
+            \s*+ , \s*+ (?&KV)
+             (?{ 
+                 my $v = pop_val(); my $k = pop_val(); add_obj_val($k, $v);
+               json_trace '->pairN';
+             })
             )* # additional pairs are optional
           )? # object may be empty
+          \s*+
         \}  # end of object
+        (?{ $trace_indent--; json_trace "->object " . Dumper(peek_val()) })
       )
     
       (?<KV>  # tuple <key, value>
-        (?{ say 'try tuple' if TRACE_JSON;$^R })
-        (?&STRING) # [$^R, "string"]
-        \s* : \s* (?&VALUE) # [[$^R, "string"], $value]
-      
-        (?{ say '->have tuple' if TRACE_JSON; [$^R->[0][0], $^R->[0][1], $^R->[1]] })
+        (?{ json_trace 'try tuple' })
+        (?&STRING)
+        (?{ json_trace 'key done' })
+        \s*+ : \s*+ 
+        (?{ json_trace 'try tuple value' })
+        (?&VALUE)
+        (?{ json_trace '->tuple ', Dumper(peek_val(-2,-1)) })
       )
     
       (?<ARRAY> # will generate a Perl array
-        (?{ [$^R, []] })  # init structure
+        (?{ json_trace "try array" })
         \[ # start of array
+          (?{ push_val([]) })  # init structure
+          \s*+
           (?: 
             (?&VALUE)   # first element 
-            (?{ say('first array item ', Dumper($^R)) if TRACE_JSON; [$^R->[0][0], [$^R->[1]]] })
-      
+            (?{  my $v = pop_val(); add_arr_val( $v )
+            })
             (?: # additional elements
-            \s* , \s* (?&VALUE) # additional elements
-              (?{ say('additional array item ', Dumper($^R)) if TRACE_JSON; [$^R->[0][0], [@{$^R->[0][1]}, $^R->[1]]] })
+            \s*+ , \s*+ (?&VALUE) # additional elements
+             (?{
+                 my $v = pop_val(); add_arr_val( $v )
+             })
             )* # additional elements are optional
           )? # array may be empty
+          \s*+
         \] # end of array
+        (?{ json_trace "->array " . Dumper(peek_val()) })
       )
     
       (?<STRING>
+        (?{ json_trace "try string" })
         (
           "
           (?:
@@ -1043,16 +1079,15 @@ sub from_json {
           )*
           "
         )
-        (?{ say 'have string' if TRACE_JSON;
-            my $s = $^N; 
-            $s =~ s/\\u([0-9A-Fa-f]{4})/\\x{$1}/g;
-            $s =~ s/@/\\@/g;
-            my $v = eval $s;
-            say "->have string '$v'" if TRACE_JSON;
-            [ $^R, $v ] })
+        (?{ 
+            my $v = eval_json_string($^N); 
+            push_val($v);
+            json_trace sprintf('->string "%s"', peek_val());
+        })
       )
     
       (?<NUMBER>
+        (?{ json_trace "try number" })
         (
           -?
           (?: 0 | [1-9]\d* )
@@ -1060,8 +1095,9 @@ sub from_json {
           (?: [eE] [-+]? \d+ )?
         )
         (?{ my $v = eval $^N;
-            say "->have number $v" if TRACE_JSON; 
-            [$^R, $v] })
+            push_val($v);
+            json_trace "->number $v"; 
+        })
       )
     
     ) #DEFINE
@@ -1332,6 +1368,7 @@ sub connect_ssl_tunnel {
 sub hexdump {
     my $data = shift;
     my $data_len = shift || 16;
+    my $ascii_only = shift || 0;
     my $hex_len = $data_len * 3;
     my $addr = 0;
     my @out;
@@ -1339,6 +1376,7 @@ sub hexdump {
         last unless $s;
         my $h = join' ', unpack('(H2)*', $s);
         $s =~ s/[\x00-\x1f]/./g;
+        $s =~ s/[\x80-\xff]/./g if $ascii_only;        
         push @out, sprintf("%06x  %-${hex_len}s %s", $addr, $h, $s);
         $addr += length($s);
     }

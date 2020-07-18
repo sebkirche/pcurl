@@ -22,21 +22,20 @@ say Dumper $o;
 
 sub TRACE_JSON {0}
 
+my @eval_stack; my $trace_indent = 0;
+sub json_trace  { say ' ' x $trace_indent, @_ if TRACE_JSON}
+sub dump_stack  { json_trace $_ for ("stack is -----", scalar(@eval_stack) . ' =>' . Dumper(\@eval_stack), '-----') }
+sub push_val    { push @eval_stack, shift; }
+sub peek_val    { my @idx = @_; @idx=(-1) unless @idx; return @eval_stack[ @idx ]; }
+sub pop_val     { return pop @eval_stack; }
+sub add_obj_val { my ($k,$v) = @_; $eval_stack[-1]->{$k} = $v; }
+sub add_arr_val { my $v = shift; push @{$eval_stack[-1]}, $v; }
 sub eval_json_string {
     my $s = shift;
     $s =~ s/\\u([0-9A-Fa-f]{4})/\\x{$1}/g;
     $s =~ s/@/\\@/g;
     return eval $s;
 }
-
-my @eval_stack;
-
-sub dump_stack  { say "stack is ",scalar(@eval_stack),' =>' , Dumper(\@eval_stack) }
-sub push_val    { push @eval_stack, shift; }
-sub peek_val    { my $idx = shift || -1; return $eval_stack[ $idx ]; }
-sub pop_val     { return pop @eval_stack; }
-sub add_obj_val { my ($k,$v) = @_; $eval_stack[-1]->{$k} = $v; }
-sub add_arr_val { my $v = shift; push @{$eval_stack[-1]}, $v; }
 
 # Return a Perl structure corresponding to a json string
 sub from_json {
