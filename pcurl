@@ -112,6 +112,11 @@ pod2usage(-exitval => 0, -verbose => 1) if $arg_hlp;
 pod2usage(-exitval => 0, -verbose => 2) if $arg_man;
 
 if ($arg_debugjson){
+    if ($arg_debugjson eq '-'){
+        my @lines = <STDIN>;
+        $arg_debugjson = join '', @lines;
+    }
+    
     my $obj = from_json($arg_debugjson);
     say Dumper $obj;
     exit 0;
