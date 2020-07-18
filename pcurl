@@ -23,6 +23,7 @@ use Time::Local;
 
 our $VERSION = '0.7.3';
 $|++; # auto flush messages
+
 $Data::Dumper::Sortkeys = 1;
 $Data::Dumper::Indent   = 2;
 
@@ -57,7 +58,7 @@ my %defports = ( http  => 80,
 my ($url, $cli_url, $auth_basic, $uagent, $http_vers, $tunnel_pid, $auto_ref, $use_cookies, $cookies, $process_action);
 my ($arg_accept, $arg_content, $arg_hlp, $arg_man, $arg_debug, $arg_verbose,
     $arg_basic, $arg_url, $arg_port, $arg_agent,
-    $arg_cookie, $arg_cookiejar, $arg_junk_session_cookies,
+    $arg_cookie, $arg_cookiejar, $arg_debugjson, $arg_junk_session_cookies,
     $arg_httpv09, $arg_httpv10, $arg_httpv11, $arg_include, $arg_include_request, 
     $arg_method, $arg_info, $arg_follow, $arg_maxredirs, $arg_maxwait, $arg_parse_only,
     $arg_proxy, $arg_proxy10, $arg_proxyuser, $arg_noproxy, $arg_action, $arg_referer,
@@ -78,6 +79,7 @@ GetOptions(
     'data-urlencode=s'     => \@arg_posturlencode,
     'data|data-ascii|d=s'  => \$arg_postdata,
     'debug'                => \$arg_debug,
+    'debug-json=s'         => \$arg_debugjson,
     'header|H=s'           => \@arg_custom_headers,
     'head|I'               => \$arg_info,
     'help|h|?'             => \$arg_hlp,
@@ -108,6 +110,12 @@ GetOptions(
     ) or pod2usage(-exitval => 2, -verbose => 0);
 pod2usage(-exitval => 0, -verbose => 1) if $arg_hlp;
 pod2usage(-exitval => 0, -verbose => 2) if $arg_man;
+
+if ($arg_debugjson){
+    my $obj = from_json($arg_debugjson);
+    say Dumper $obj;
+    exit 0;
+}
 
 # User-Agent
 $uagent = $arg_agent || "pCurl/$VERSION";
@@ -938,6 +946,10 @@ sub perform_action {
     }
 }
 
+sub TRACE_JSON {
+    return $arg_debugjson ? 1 : 0;
+}
+
 # Return a Perl structure corresponding to a json string
 sub from_json {
     my $rx = qr{
@@ -955,24 +967,24 @@ sub from_json {
     
     (?(DEFINE) # this does not try to match, it only defines a serie of named patterns
     
-      (?<VALUE>
+      (?<VALUE> (?{ say 'value?' if TRACE_JSON;$^R })
         \s*
         (
-        (?&OBJECT)
+        (?{ say 'try object' if TRACE_JSON;$^R }) (?&OBJECT)
         |
-        (?&NUMBER)
+        (?{ say 'try number' if TRACE_JSON;$^R }) (?&NUMBER) (?{ say 'post number' if TRACE_JSON;$^R })
         |
-        (?&STRING)
+        (?{ say 'try string' if TRACE_JSON;$^R }) (?&STRING)
         |
-        (?&ARRAY)
+        (?{ say 'try array'  if TRACE_JSON;$^R }) (?&ARRAY)
         |
-        true  (?{ [$^R, 1] })
+        true  (?{ say '->true' if TRACE_JSON; [$^R, 1] })
         |
-        false (?{ [$^R, 0] })
+        false (?{ say '->false' if TRACE_JSON; [$^R, 0] })
         |
-        null  (?{ [$^R, undef] })
-        )
-        \s*
+        null  (?{ say '->null' if TRACE_JSON; [$^R, undef] })
+        ) (?{ say 'post value alternatives' if TRACE_JSON;$^R })
+        \s* (?{ say 'end of value' if TRACE_JSON;$^R })
       )
     
       (?<OBJECT> # will generate a Perl hash
@@ -981,21 +993,22 @@ sub from_json {
           \s*
           (?: 
             (?&KV) # [[$^R, {}], $k, $v]   # first pair 
-            (?{ [$^R->[0][0], {$^R->[1] => $^R->[2]}] })
+            (?{ say('first object pair ', Dumper($^R)) if TRACE_JSON; [$^R->[0][0], {$^R->[1] => $^R->[2]}] })
       
             (?: # additional pairs 
             \s* , \s* (?&KV) # [[$^R, {...}], $k, $v]
-              (?{ [$^R->[0][0], {%{ $^R->[0][1]}, $^R->[1] => $^R->[2]}] })
+              (?{ say('additional object pair ', Dumper($^R)) if TRACE_JSON; [$^R->[0][0], {%{ $^R->[0][1]}, $^R->[1] => $^R->[2]}] })
             )* # additional pairs are optional
           )? # object may be empty
         \}  # end of object
       )
     
       (?<KV>  # tuple <key, value>
+        (?{ say 'try tuple' if TRACE_JSON;$^R })
         (?&STRING) # [$^R, "string"]
         \s* : \s* (?&VALUE) # [[$^R, "string"], $value]
       
-        (?{ [$^R->[0][0], $^R->[0][1], $^R->[1]] })
+        (?{ say '->have tuple' if TRACE_JSON; [$^R->[0][0], $^R->[0][1], $^R->[1]] })
       )
     
       (?<ARRAY> # will generate a Perl array
@@ -1003,11 +1016,11 @@ sub from_json {
         \[ # start of array
           (?: 
             (?&VALUE)   # first element 
-            (?{ [$^R->[0][0], [$^R->[1]]] })
+            (?{ say('first array item ', Dumper($^R)) if TRACE_JSON; [$^R->[0][0], [$^R->[1]]] })
       
             (?: # additional elements
             \s* , \s* (?&VALUE) # additional elements
-              (?{ [$^R->[0][0], [@{$^R->[0][1]}, $^R->[1]]] })
+              (?{ say('additional array item ', Dumper($^R)) if TRACE_JSON; [$^R->[0][0], [@{$^R->[0][1]}, $^R->[1]]] })
             )* # additional elements are optional
           )? # array may be empty
         \] # end of array
@@ -1025,10 +1038,13 @@ sub from_json {
           )*
           "
         )
-        (?{ my $s = $^N; 
+        (?{ say 'have string' if TRACE_JSON;
+            my $s = $^N; 
             $s =~ s/\\u([0-9A-Fa-f]{4})/\\x{$1}/g;
             $s =~ s/@/\\@/g;
-            [ $^R, eval $s ]})
+            my $v = eval $s;
+            say "->have string '$v'" if TRACE_JSON;
+            [ $^R, $v ] })
       )
     
       (?<NUMBER>
@@ -1038,7 +1054,9 @@ sub from_json {
           (?: \. \d+ )?
           (?: [eE] [-+]? \d+ )?
         )
-        (?{ [$^R, eval $^N] })
+        (?{ my $v = eval $^N;
+            say "->have number $v" if TRACE_JSON; 
+            [$^R, $v] })
       )
     
     ) #DEFINE

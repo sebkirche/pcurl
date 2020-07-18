@@ -14,6 +14,8 @@ if (-f $data){
     close $f;
 }
 
+say $data;
+
 my $o = from_json($data);
 $Data::Dumper::Indent   = 2;    # fancy dump
 say Dumper $o;
