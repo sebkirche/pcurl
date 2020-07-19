@@ -1,4 +1,4 @@
-#!/bin/env perl
+#!/usr/bin/env perl
 
 # pCurl - a cURL-like implemented in Perl
 #         with custom features like STOMP message sending
@@ -1131,7 +1131,7 @@ sub to_json {
     # return 'expecting a hashref as input' unless ref $h eq 'HASH';
 
     my $j;
-    if (!defined $data || $data =~ /null/i){
+    if (!defined $data){
         $j = "null";
     } elsif (ref $data eq 'HASH'){
         my @items;
