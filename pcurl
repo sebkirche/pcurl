@@ -977,7 +977,7 @@ sub add_arr_val { my $v = shift; push @{$eval_stack[-1]}, $v; }
 sub eval_json_string {
     my $s = shift;
     $s =~ s/\\u([0-9A-Fa-f]{4})/\\x{$1}/g;
-    $s =~ s/@/\\@/g;
+    $s =~ s/([@\$*%])/\\$1/g;            # prevent interpolation of sigils
     return eval $s;
 }
 
