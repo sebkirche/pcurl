@@ -1,4 +1,4 @@
-#!/usr/bin/perl
+#!/bin/env perl
 
 # pCurl - a cURL-like implemented in Perl
 #         with custom features like STOMP message sending
@@ -38,17 +38,17 @@ BEGIN{                          # automagic breakpoint for warnings when script 
         $DB::single = 1;        # we stop execution if a warning occurs during run
     };
 }
-$SIG{INT}  = sub { say "SIGINT / CTRL-C received (Interrupt from keyboard). Leaving."; exit };
-$SIG{QUIT} = sub { say "SIGQUIT / CTRL-\\ received (Quit from keyboard). Leaving."; exit };
-$SIG{ABRT} = sub { say "SIGABRT received (Probable abnormal process termination requested by a library). Leaving."; exit };
-$SIG{TERM} = sub { say "SIGTERM received - External termination request. Leaving."; exit };
+$SIG{INT}  = sub { say STDERR "SIGINT / CTRL-C received (Interrupt from keyboard). Leaving."; exit };
+$SIG{QUIT} = sub { say STDERR "SIGQUIT / CTRL-\\ received (Quit from keyboard). Leaving."; exit };
+$SIG{ABRT} = sub { say STDERR "SIGABRT received (Probable abnormal process termination requested by a library). Leaving."; exit };
+$SIG{TERM} = sub { say STDERR "SIGTERM received - External termination request. Leaving."; exit };
 sub suspend_trap {
-    say "SIGTSTP / CTRL-Z received. Suspending...";
+    say STDERR "SIGTSTP / CTRL-Z received. Suspending...";
     $SIG{TSTP} = 'DEFAULT';
     kill 'TSTP', -(getpgrp $$);
 }
 $SIG{TSTP} = \&suspend_trap;
-$SIG{CONT} = sub { $SIG{TSTP} = \&suspend_trap; say "SIGCONT received - continue after suspension." };
+$SIG{CONT} = sub { $SIG{TSTP} = \&suspend_trap; say STDERR "SIGCONT received - continue after suspension." };
 # --------------------------------------------------
 
 my $max_redirs = 50;            # default value for maximum redirects to follow
@@ -59,7 +59,7 @@ my %defports = ( http  => 80,
 my ($url, $cli_url, $auth_basic, $uagent, $http_vers, $tunnel_pid, $auto_ref, $use_cookies, $cookies, $process_action);
 my ($arg_accept, $arg_content, $arg_hlp, $arg_man, $arg_debug, $arg_verbose,
     $arg_basic, $arg_url, $arg_port, $arg_agent,
-    $arg_cookie, $arg_cookiejar, $arg_debugjson, $arg_junk_session_cookies,
+    $arg_cookie, $arg_cookiejar, $arg_debugjson, $arg_debugjson_export, $arg_junk_session_cookies,
     $arg_httpv09, $arg_httpv10, $arg_httpv11, $arg_include, $arg_include_request, 
     $arg_method, $arg_info, $arg_follow, $arg_maxredirs, $arg_maxwait, $arg_parse_only,
     $arg_proxy, $arg_proxy10, $arg_proxyuser, $arg_noproxy, $arg_action, $arg_referer,
@@ -81,6 +81,7 @@ GetOptions(
     'data|data-ascii|d=s'  => \$arg_postdata,
     'debug'                => \$arg_debug,
     'debug-json=s'         => \$arg_debugjson,
+    'debug-json-export'    => \$arg_debugjson_export,
     'header|H=s'           => \@arg_custom_headers,
     'head|I'               => \$arg_info,
     'help|h|?'             => \$arg_hlp,
@@ -113,13 +114,19 @@ pod2usage(-exitval => 0, -verbose => 1) if $arg_hlp;
 pod2usage(-exitval => 0, -verbose => 2) if $arg_man;
 
 if ($arg_debugjson){
+    say STDERR "Testing JSON parser...";
     if ($arg_debugjson eq '-'){
         my @lines = <STDIN>;
         $arg_debugjson = join '', @lines;
     }
-    
+    say STDERR "Reading done. Parsing...";
     my $obj = from_json($arg_debugjson);
-    say Data::Dumper->Dump([$obj],[ 'json' ]);
+    say STDERR "Parsing done. Dumping...";
+    if ($arg_debugjson_export){
+        say to_json($obj);
+    } else {
+        say Data::Dumper->Dump([$obj],[ 'json' ]);
+    }
     exit 0;
 }
 
@@ -739,7 +746,10 @@ sub get_matching_cookies {
 # Return the list of cookie definitions contained in a Set-Cookie header
 sub parse_cookie_header {
     my ($head_val, $url) = @_;
-    my %months = ( Jan=>0, Feb=>1, Mar=>2, Apr=>3, May=>4, Jun=>5, Jul=>6, Aug=>7, Sep=>8, Oct=>9, Nov=>10, Dec=>11 );
+    # the local our fixes the Warning: 'Variable "%months" will not stay shared at (re_eval 22) line 2.'
+    # because the $rx captures the %months variable, but a different $rx is built every time the function may be called
+    # https://stackoverflow.com/a/19454419/317266
+    local our %months = ( Jan=>0, Feb=>1, Mar=>2, Apr=>3, May=>4, Jun=>5, Jul=>6, Aug=>7, Sep=>8, Oct=>9, Nov=>10, Dec=>11 );
     my $cookies;
     my $rx = qr{
     # NOTES:
@@ -956,8 +966,8 @@ sub TRACE_JSON {
     return $arg_debugjson ? 1 : 0;
 }
 
-my @eval_stack; my $trace_indent = 0;
-sub json_trace  { say ' ' x $trace_indent, @_ if TRACE_JSON}
+my @eval_stack; my $trace_indent; my $object_count;
+sub json_trace  { return unless -t STDERR; say STDERR ' ' x $trace_indent, @_ if TRACE_JSON}
 sub dump_stack  { json_trace $_ for ("stack is -----", scalar(@eval_stack) . ' =>' . Dumper(\@eval_stack), '-----') }
 sub push_val    { push @eval_stack, shift; }
 sub peek_val    { my @idx = @_; @idx=(-1) unless @idx; return @eval_stack[ @idx ]; }
@@ -973,6 +983,10 @@ sub eval_json_string {
 
 # Return a Perl structure corresponding to a json string
 sub from_json {
+    @eval_stack = ();
+    $trace_indent = 0;
+    $object_count = 0;
+    
     my $rx = qr{
     # NOTES:
     # this regex is a recusrive descent parser - see https://www.perlmonks.org/?node_id=995856
@@ -1008,7 +1022,7 @@ sub from_json {
         )
         \s*+
         (?{ $trace_indent--; })
-        (?{ json_trace '->value'; dump_stack() if TRACE_JSON })
+        (?{ json_trace '->value'; dump_stack() if TRACE_JSON && -t STDERR })
       )
     
       (?<OBJECT> # will generate a Perl hash
@@ -1032,7 +1046,7 @@ sub from_json {
           )? # object may be empty
           \s*+
         \}  # end of object
-        (?{ $trace_indent--; json_trace "->object " . Dumper(peek_val()) })
+        (?{ $trace_indent--; $object_count++; say STDERR "$object_count objects" if $object_count % 10 == 0 and TRACE_JSON; json_trace "->object " . Dumper(peek_val()) })
       )
     
       (?<KV>  # tuple <key, value>
@@ -1105,7 +1119,8 @@ sub from_json {
     my $struct;
     {
         local $_ = shift;
-        local $^R;
+        # we do not use $^R anymore
+        # local $^R;
         eval { m{\A$rx\z}; } and $struct = $_;
     }
     return $struct;
