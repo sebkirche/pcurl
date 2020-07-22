@@ -18,7 +18,7 @@ use IO::Socket::INET;
 use IPC::Open3;
 use MIME::Base64 'encode_base64';
 use Pod::Usage;
-use Socket;
+use Socket qw(IPPROTO_TCP TCP_NODELAY);
 use Time::Local;
 # use Carp::Always;
 
@@ -57,14 +57,14 @@ my %defports = ( http  => 80,
                  https => 443 );
 
 my ($url, $cli_url, $auth_basic, $uagent, $http_vers, $tunnel_pid, $auto_ref, $use_cookies, $cookies, $process_action);
-my ($arg_accept, $arg_content, $arg_hlp, $arg_man, $arg_debug, $arg_verbose,
+my ($arg_tcpnodelay, $arg_accept, $arg_content, $arg_hlp, $arg_man, $arg_debug, $arg_verbose,
     $arg_basic, $arg_url, $arg_port, $arg_agent,
     $arg_cookie, $arg_cookiejar, $arg_debugjson, $arg_debugjson_export, $arg_junk_session_cookies,
     $arg_httpv09, $arg_httpv10, $arg_httpv11, $arg_include, $arg_include_request, 
     $arg_method, $arg_info, $arg_follow, $arg_maxredirs, $arg_maxwait, $arg_parse_only,
     $arg_proxy, $arg_proxy10, $arg_proxyuser, $arg_noproxy, $arg_action, $arg_referer,
     $arg_postdata, $arg_postraw, $arg_postbinary,
-    $arg_stompdest, $arg_stompmsg, $arg_outfile) = ();
+    $arg_stompdest, $arg_stompmsg, $arg_outfile) = (1);
 my @arg_custom_headers;
 my @arg_posturlencode;
 
@@ -106,6 +106,7 @@ GetOptions(
     'request|X=s'          => \$arg_method,
     # 'stompdest=s'        => \$arg_stompdest,
     'stompmsg=s'           => \$arg_stompmsg,
+    'tcp-nodelay!'         => \$arg_tcpnodelay,
     'url=s'                => \$arg_url,
     'user-agent|A=s'       => \$arg_agent,
     'verbose|v'            => \$arg_verbose,
@@ -1351,6 +1352,10 @@ sub connect_direct_socket {
     my $sock = new IO::Socket::INET(PeerAddr => $host,
                                     PeerPort => $port,
                                     Proto    => 'tcp') or die "Can't connect to $host:$port\n";
+    if ($arg_tcpnodelay){
+        $sock->setsockopt(IPPROTO_TCP, TCP_NODELAY, 1);
+        say STDERR "* TCP_NODELAY set" if $arg_verbose || $arg_debug;
+    }
     $sock->autoflush(1);
     say STDERR "* connected to $host:$port" if $arg_verbose || $arg_debug;
     
