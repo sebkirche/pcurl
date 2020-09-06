@@ -14,6 +14,8 @@ pCurl has its own recursive descent (extended regex based) JSON parser, and can 
 * values of the response headers
 * single values or subsets of a JSON response (with builtin jsonification); parsing of a local file is supported with `file:` protocol
 
+I am planning to implement a limited set of decision structures (`if`, `case`) capable to define a return value based on a header or a JSON value, or to perform polling until a defined failure or success condition.
+
 Perl limited dependencies are:
 
 * Data::Dumper
