@@ -1,18 +1,18 @@
 pCurl - a cURL-like implemented in Perl
 =======================================
 
-pCurl goal is to provide a self-contain Perl curl-like tool capable of making http(s) requests and parse JSON results without the need for additional tools or Perl packages (i am cheating for https by calling openSSL for http tunnelling).
+pCurl goal is to provide a self-contain Perl curl-like tool capable of making http(s) requests and parse JSON results without the need for additional tools or Perl packages (i am cheating for https by calling openSSL for tunnelling).
 
 I support the following protocols:
-* http: and https: with all GET, HEAD, POST, PUT, TRACE, OPTIONS, DELETE or other custom actions
+* `http:` and `https:` with all GET, HEAD, POST, PUT, TRACE, OPTIONS, DELETE or other custom actions
 * http will try to honor 0.9, 1.0 and 1.1 versions if required (default is 1.0)
-* file:
-* stomp: we can make limited STOMP SEND, initial intent was to push notifications to ApacheMQ
+* `file:`
+* `stomp:` pseudo protocol: we can make limited STOMP SENDs, initial intent was to push notifications to ApacheMQ
 
 pCurl has its own recursive descent (extended regex based) JSON parser, and can returned processed outputs (called result actions, see below) based on:
 * regular expression on the data returned
 * values of the response headers
-* single values or subsets of a JSON response (with builtin jsonification)
+* single values or subsets of a JSON response (with builtin jsonification); parsing of a local file is supported with `file:` protocol
 
 Perl limited dependencies are:
 
@@ -171,10 +171,12 @@ To simplify some post-processing on the retrieved resources, you can specify an 
 Action can be of type:
 
 * print: display a response header value, or a json response attribute
+
 ** `pcurl --action=header:server http://free.fr` => `nginx`
 ** `pcurl https://jsonplaceholder.typicode.com/users/1 --action='json:id'` => `1`
 ** `pcurl http://jsonplaceholder.typicode.com/users --action='json:[3]/address/geo'` => `{"lng":-164.299,"lat":29.4572}`
 ** `pcurl http://jsonplaceholder.typicode.com/users --action='json:[3]/address/geo/lat'` => `29.4572`
+
 * regex: display the match of a regex on the response body
 
 Return codes
