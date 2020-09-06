@@ -171,11 +171,10 @@ To simplify some post-processing on the retrieved resources, you can specify an 
 Action can be of type:
 
 * print: display a response header value, or a json response attribute
-
-** `pcurl --action=header:server http://free.fr` => `nginx`
-** `pcurl https://jsonplaceholder.typicode.com/users/1 --action='json:id'` => `1`
-** `pcurl http://jsonplaceholder.typicode.com/users --action='json:[3]/address/geo'` => `{"lng":-164.299,"lat":29.4572}`
-** `pcurl http://jsonplaceholder.typicode.com/users --action='json:[3]/address/geo/lat'` => `29.4572`
+    * `pcurl --action=header:server http://free.fr` => `nginx`
+    * `pcurl https://jsonplaceholder.typicode.com/users/1 --action='json:id'` => `1`
+    * `pcurl http://jsonplaceholder.typicode.com/users --action='json:[3]/address/geo'` => `{"lng":-164.299,"lat":29.4572}`
+    * `pcurl http://jsonplaceholder.typicode.com/users --action='json:[3]/address/geo/lat'` => `29.4572`
 
 * regex: display the match of a regex on the response body
 
