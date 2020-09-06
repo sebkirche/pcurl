@@ -1,6 +1,30 @@
 pCurl - a cURL-like implemented in Perl
 =======================================
 
+pCurl goal is to provide a self-contain Perl curl-like tool capable of making http(s) requests and parse JSON results without the need for additional tools or Perl packages (i am cheating for https by calling openSSL for http tunnelling).
+
+I support the following protocols:
+* http: and https: with all GET, HEAD, POST, PUT, TRACE, OPTIONS, DELETE or other custom actions
+* http will try to honor 0.9, 1.0 and 1.1 versions if required (default is 1.0)
+* file:
+* stomp: we can make limited STOMP SEND, initial intent was to push notifications to ApacheMQ
+
+pCurl has its own recursive descent (extended regex based) JSON parser, and can returned processed outputs (called result actions, see below) based on:
+* regular expression on the data returned
+* values of the response headers
+* single values or subsets of a JSON response (with builtin jsonification)
+
+Perl limited dependencies are:
+
+* Data::Dumper
+* Getopt::Long
+* IO::Select, IO::Socket::INET and Socket
+* IPC::Open3 (to call openSSL and pipe its IO on our STDIN and STDOUT)
+* MIME::Base64
+* Pod::Usage
+* Time::Local
+* locally available openSSL
+
 When possible, pCurl supports cURL command line arguments.
 
 Usage
@@ -148,15 +172,18 @@ Action can be of type:
 
 * print: display a response header value, or a json response attribute
 ** `pcurl --action=header:server http://free.fr` => `nginx`
-** `pcurl https://jsonplaceholder.typicode.com/users/1 --action='json:id'` 
+** `pcurl https://jsonplaceholder.typicode.com/users/1 --action='json:id'` => `1`
+** `pcurl http://jsonplaceholder.typicode.com/users --action='json:[3]/address/geo'` => `{"lng":-164.299,"lat":29.4572}`
+** `pcurl http://jsonplaceholder.typicode.com/users --action='json:[3]/address/geo/lat'` => `29.4572`
 * regex: display the match of a regex on the response body
 
 Return codes
 ------------
 
-0 : No error
-1 : no URL / wrong URL (does not parse the URL syntax)
-2 : unknown option
-3 : url stomp:// without --stompmsg parameter
-4 : no URL / wrong URL for proxy (does not parse the URL syntax)
-5 : HTTP CONNECT failed for tunnel
+* 0 : No error
+* 1 : no URL / wrong URL (does not parse the URL syntax)
+* 2 : unknown option
+* 3 : url stomp:// without --stompmsg parameter
+* 4 : no URL / wrong URL for proxy (does not parse the URL syntax)
+* 5 : HTTP CONNECT failed for tunnel
+* 6 : cannot access the file via file: protocol
