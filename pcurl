@@ -1213,6 +1213,7 @@ sub to_json {
         $data =~ s/[\b]/\\b/g;
         $data =~ s/[\f]/\\f/g;
         $data =~ s/[\t]/\\t/g;
+        $data =~ s/([\x00-\x1f]|[\x7f-\x{ffff}])/sprintf('\u%04x', ord($1))/eg; # for unicode chars
         $j = '"' . $data . '"';
     }
     return $j;
