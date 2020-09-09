@@ -1002,10 +1002,15 @@ sub perform_action {
             say STDOUT $resp->{headers}{lc $action->{args}{value}};
         } elsif ($action->{args}{what} eq 'json'){
             my $js = from_json(${$resp->{captured}});
-            # say Dumper $js;
-            my $jp = $action->{args}{value};
-            my $jval = get_jpath($js, $jp);
-            say STDOUT $jval;
+            if ($js){
+                # say Dumper $js;
+                my $jp = $action->{args}{value};
+                my $jval = get_jpath($js, $jp);
+                say STDOUT $jval;
+            } else {
+                say STDERR "Request did not returned a valid JSON for an action.";
+                exit 7;
+            }
         }
     } elsif (lc $action->{action} eq 'grep'){
         if ($action->{args}{what} eq 'body'){
