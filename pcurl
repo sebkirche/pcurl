@@ -33,7 +33,7 @@ BEGIN{                          # automagic breakpoint for warnings when script 
     $SIG{__WARN__} = sub {
         my $msg = shift;
         chomp $msg;
-        say "Warning: '$msg'";
+        say STDERR "Warning: '$msg'";
         no warnings 'once';     # avoid « Warning: 'Name "DB::single" used only once: possible typo »
         $DB::single = 1;        # we stop execution if a warning occurs during run
     };
