@@ -1242,12 +1242,21 @@ sub get_jpath {
     my $p = shift @$path;       # next element to get from path
     my $v;                      # placeholder for data
     if (ref $ref eq 'ARRAY'){
-        if ($p =~ /\[(.*)\]/){
+        if ($p =~ /\[(\d*)\]/){
             my $index = eval $1;
-            die sprintf("Index '%s' is greater than max index of array (%d) in path '%s'", $p, scalar(@$ref)-1, $fullpath) if $index >= scalar @$ref;
-            $v = @{$ref}[$index];
-            die "eval issue: ".$@ if $@;
-            return get_jpath($v, $path, $fullpath) if @$path;
+            die "eval issue of `$1`: ".$@ if $@;
+            if (defined $index && $index ne ''){
+                die sprintf("Index '%s' is greater than max index of array (%d) in path '%s'", $p, scalar(@$ref)-1, $fullpath) if $index >= scalar @$ref;
+                $v = @{$ref}[$index];
+                return get_jpath($v, $path, $fullpath) if @$path;
+            } else {
+                   # for empty squared brackets, return whole array or process function
+                if (@$path){
+                    return get_jpath($ref, $path, $fullpath);
+                } else {
+                    $v = $ref;
+                }
+            }
         } elsif ($p eq 'length()'){
             return scalar @$ref;
         } else {
