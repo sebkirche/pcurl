@@ -218,6 +218,7 @@ if ($arg_remotename){
 if ($arg_outfile){
     open $STDOLD, '>&', STDOUT;
     open STDOUT, '>', $arg_outfile or die "Cannot open $arg_outfile for output.";
+    # binmode(STDOUT, ":raw");
     # later, to restore STDOUT:
     # open (STDOUT, '>&', $STDOLD);
 }
@@ -752,6 +753,7 @@ sub process_http_response {
                 # we show body contents only when not following redirects
                 my $is_redirected = $resp{status} && $resp{status}{code} && $resp{status}{code} =~ /^3/;
                 say STDERR "* Ignoring the response-body" if ($is_redirected && $arg_follow) && (! $fh->eof ) && ($arg_verbose || $arg_debug);
+                binmode(STDOUT, ":raw"); # pass in raw layer to prevent utf8 or cr/lf conversion in binary files
                 unless ($fh->eof){ # loop on the remaining of response
                     $content_length = $headers{'content-length'};
                     if ($content_length){
