@@ -22,7 +22,7 @@ use Socket qw(IPPROTO_TCP TCP_NODELAY);
 use Time::Local;
 # use Carp::Always;
 
-our $VERSION = '0.7.4';
+our $VERSION = '0.7.5';
 $|++; # auto flush messages
 
 $Data::Dumper::Sortkeys = 1;
@@ -119,6 +119,11 @@ if ($arg_debugjson){
     if ($arg_debugjson eq '-'){
         my @lines = <STDIN>;
         $arg_debugjson = join '', @lines;
+    } elsif (-r $arg_debugjson){
+        open (my $fh, '<', $arg_debugjson) or die "Cannot open $arg_debugjson: $!";
+        local $/;
+        $arg_debugjson = <$fh>;
+        close $fh;
     }
     say STDERR "Reading done. Parsing...";
     my $obj = from_json($arg_debugjson);
@@ -1218,7 +1223,7 @@ sub to_json {
         $data =~ s/[\b]/\\b/g;
         $data =~ s/[\f]/\\f/g;
         $data =~ s/[\t]/\\t/g;
-        $data =~ s/([\x00-\x1f]|[\x7f-\x{ffff}])/sprintf('\u%04x', ord($1))/eg; # for unicode chars
+        # $data =~ s/([\x00-\x1f]|[\x7f-\x{ffff}])/sprintf('\u%04x', ord($1))/eg; # for unicode chars
         $j = '"' . $data . '"';
     }
     return $j;
@@ -1243,6 +1248,8 @@ sub get_jpath {
             $v = @{$ref}[$index];
             die "eval issue: ".$@ if $@;
             return get_jpath($v, $path, $fullpath) if @$path;
+        } elsif ($p eq 'length()'){
+            return scalar @$ref;
         } else {
             die "Array is not accessible with '$p' in path '$fullpath'" if $p;
             $v = $ref;
