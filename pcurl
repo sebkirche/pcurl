@@ -208,7 +208,7 @@ if ($arg_parse_only){
 # if we want to output in a file, redirect the initial STDOUT
 my $STDOLD;
 if ($arg_remotename){
-    if ($url->{path} =~ m{\/(.+?)$}){
+    if ($url->{path} =~ m{\/([^/]+)$}){
         $arg_outfile = $1;
     } else {
         say STDERR "Cannot get remote file name from url.";
