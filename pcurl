@@ -22,7 +22,7 @@ use Socket qw(IPPROTO_TCP TCP_NODELAY);
 use Time::Local;
 # use Carp::Always;
 
-our $VERSION = '0.7.5';
+our $VERSION = '0.7.6';
 $|++; # auto flush messages
 
 $Data::Dumper::Sortkeys = 1;
@@ -62,7 +62,7 @@ my ($arg_tcpnodelay, $arg_accept, $arg_content, $arg_hlp, $arg_man, $arg_debug, 
     $arg_cookie, $arg_cookiejar, $arg_debugjson, $arg_debugjson_export, $arg_junk_session_cookies,
     $arg_httpv09, $arg_httpv10, $arg_httpv11, $arg_include, $arg_include_request, 
     $arg_method, $arg_info, $arg_follow, $arg_maxredirs, $arg_maxwait, $arg_parse_only,
-    $arg_proxy, $arg_proxy10, $arg_proxyuser, $arg_noproxy, $arg_action, $arg_referer,
+    $arg_proxy, $arg_proxy10, $arg_proxyuser, $arg_noproxy, $arg_action, $arg_referer, $arg_remotename,
     $arg_postdata, $arg_postraw, $arg_postbinary,
     $arg_stompdest, $arg_stompmsg, $arg_outfile) = (1);
 my @arg_custom_headers;
@@ -102,6 +102,7 @@ GetOptions(
     'proxy-user|U=s'       => \$arg_proxyuser,
     'proxy10=s'            => \$arg_proxy10,
     'proxy|x=s'            => \$arg_proxy,
+    'remote-name|O'        => \$arg_remotename,
     'referer|e=s'          => \$arg_referer,
     'request|X=s'          => \$arg_method,
     # 'stompdest=s'        => \$arg_stompdest,
@@ -179,15 +180,6 @@ if ($arg_action){
     $process_action = parse_process_action($arg_action);
 }
 
-# if we want to output in a file, redirect the initial STDOUT
-my $STDOLD;
-if ($arg_outfile){
-    open $STDOLD, '>&', STDOUT;
-    open STDOUT, '>', $arg_outfile or die "Cannot open $arg_outfile for output.";
-    # later, to restore STDOUT:
-    # open (STDOUT, '>&', $STDOLD);
-}
-
 $cli_url = $arg_url || $ARGV[0];
 unless ($cli_url){
     say STDERR "No url provided...";
@@ -211,6 +203,23 @@ if ($arg_parse_only){
     } else {
         exit 1;
     }
+}
+
+# if we want to output in a file, redirect the initial STDOUT
+my $STDOLD;
+if ($arg_remotename){
+    if ($url->{path} =~ m{\/(.+?)$}){
+        $arg_outfile = $1;
+    } else {
+        say STDERR "Cannot get remote file name from url.";
+        exit 7;
+    }
+}
+if ($arg_outfile){
+    open $STDOLD, '>&', STDOUT;
+    open STDOUT, '>', $arg_outfile or die "Cannot open $arg_outfile for output.";
+    # later, to restore STDOUT:
+    # open (STDOUT, '>&', $STDOLD);
 }
 
 if ($url->{scheme} =~ /^http/){
@@ -1242,7 +1251,7 @@ sub get_jpath {
     my $p = shift @$path;       # next element to get from path
     my $v;                      # placeholder for data
     if (ref $ref eq 'ARRAY'){
-        if ($p =~ /\[(\d*)\]/){
+        if ($p =~ /\[(\d*)\]/){ # we try to access by index
             my $index = eval $1;
             die "eval issue of `$1`: ".$@ if $@;
             if (defined $index && $index ne ''){
@@ -1258,17 +1267,25 @@ sub get_jpath {
                 }
             }
         } elsif ($p eq 'length()'){
-            return scalar @$ref;
+            return scalar @$ref; # pseudo function for size of array
         } else {
-            die "Array is not accessible with '$p' in path '$fullpath'" if $p;
+            die "Array is not accessible with '$p' in path '$fullpath'" if $p; # non-numeric index
+            # return t
             $v = $ref;
         }
     } elsif (ref $ref eq 'HASH'){
         if ($p){
-            die Dumper($ref) . "object does not contain '$p' in path '$fullpath'" unless exists $ref->{$p};
-            $v = $ref->{$p};
-            return get_jpath($v, $path, $fullpath) if @$path;
+            # we still have a remaining path
+            if (exists $ref->{$p}){
+                $v = $ref->{$p};
+                return get_jpath($v, $path, $fullpath) if @$path;
+            } elsif ($p eq 'length()'){
+                return scalar keys %$ref; # pseudo function for number of keys in object
+            } else {
+                die Dumper($ref) . "object does not contain '$p' in path '$fullpath'";
+            }            
         } else {
+            # no more path, return the object
             $v = $ref;
         }
     }
@@ -1636,6 +1653,10 @@ Set the proxy authentication. Only Basic Auth is supported.
 =item -e, --referer <referer url>
 
 Specify a string for the referer. If followed by ";auto", when following redirections, reuse the previous url as referer. ";auto" can also be used alone with redirections.
+
+=item -O, --remote-name
+
+Write output to a file named as the remote file (that name is extracted from the URL).
 
 =item -X, --request <method>
 

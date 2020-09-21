@@ -146,6 +146,10 @@ Options
         following redirections, reuse the previous url as referer. ";auto"
         can also be used alone with redirections.
 
+    -O, --remote-name
+        Write output to a file named as the remote file (that name is
+        extracted from the URL).
+
     -X, --request <method>
         Specify the method for the request. Common methods are GET, HEAD,
         POST, PUT, TRACE, OPTIONS and DELETE, but you can specify a custom
@@ -190,3 +194,4 @@ Return codes
 * 4 : no URL / wrong URL for proxy (does not parse the URL syntax)
 * 5 : HTTP CONNECT failed for tunnel
 * 6 : cannot access the file via file: protocol
+* 7 : cannot get remote file name from url
