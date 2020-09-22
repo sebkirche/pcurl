@@ -12,7 +12,7 @@ use feature 'say';
 use utf8;
 use open ':std', ':encoding(UTF-8)';
 use Data::Dumper;
-use Getopt::Long qw(:config no_ignore_case bundling);
+use Getopt::Long qw(:config no_ignore_case bundling); # debug
 use IO::Select;
 use IO::Socket::INET;
 use IPC::Open3;
@@ -240,8 +240,10 @@ if ($url->{scheme} =~ /^http/){
     if ($arg_method){
         if ($arg_method =~ /^(GET|HEAD|POST|PUT|TRACE|OPTIONS|DELETE)$/i){
             $arg_method = uc $arg_method;
-            say STDERR "HTTP/0.9 only supports GET method.\n" if $arg_method ne 'GET' and HTTP09();
-            exit 2;
+            if ($arg_method ne 'GET' and HTTP09()){
+                say STDERR "HTTP/0.9 only supports GET method.\n" ;
+                exit 2;
+            }
         } else {
             # Nothing, one can have a custom HTTP method
         }
