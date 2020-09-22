@@ -60,48 +60,49 @@ my ($url, $cli_url, $uagent, $http_vers, $tunnel_pid, $auto_ref, $use_cookies, $
 my %args = ( 'tcp-nodelay' => 1, 'data-urlencode' => [], header => []  );
 
 GetOptions(\%args,
-    'accept=s',             
-    'action=s',             
-    'basic=s',              
-    'content=s',            
-    'cookie|b=s',           
-    'cookie-jar|c=s',       
-    'data-binary=s',        
-    'data-raw=s',           
-    'data-urlencode=s@',    
-    'data|data-ascii|d=s',  
-    'debug',                
-    'debug-json=s',         
-    'debug-json-export',    
-    'header|H=s@',
-    'head|I',
-    'help|h|?',
-    'http09',
-    'http10',
-    'http11',
-    'include-response|include|i',
-    'include-request',
-    'junk-session-cookies',
-    'location|L',
-    'man',
-    'max-wait=i',
-    'max-redirs=i',
-    'noproxy=s',
-    'output|o=s',
-    'parse-only',               # just show how we parse the URL
-    'port|p=i',
-    'proxy-user|U=s',
-    'proxy10=s',
-    'proxy|x=s',
-    'remote-name|O',
-    'referer|e=s',
-    'request|X=s',
-    # 'stompdest=s',
-    'stompmsg=s',
-    'tcp-nodelay!',             # negatable: --notcp-nodelay
-    'url=s',
-    'user-agent|A=s',
-    'verbose|v',
+           'accept=s',
+           'action=s',
+           'basic=s',
+           'content=s',
+           'cookie|b=s',
+           'cookie-jar|c=s',
+           'data-binary=s',
+           'data-raw=s',
+           'data-urlencode=s@',
+           'data|data-ascii|d=s',
+           'debug',
+           'debug-json=s',
+           'debug-json-export',
+           'header|H=s@',
+           'head|I',
+           'help|h|?',
+           'http09',
+           'http10',
+           'http11',
+           'include-response|include|i',
+           'include-request',
+           'junk-session-cookies',
+           'location|L',
+           'man',
+           'max-wait=i',
+           'max-redirs=i',
+           'noproxy=s',
+           'output|o=s',
+           'parse-only',        # just show how we parse the URL
+           'port|p=i',
+           'proxy-user|U=s',
+           'proxy10=s',
+           'proxy|x=s',
+           'remote-name|O',
+           'remote-time|R',
+           'referer|e=s',
+           'request|X=s',
+           # 'stompdest=s',
+           'stompmsg=s',
+           'tcp-nodelay!',      # negatable: --notcp-nodelay
+           'url=s',
+           'user-agent|A=s',
+           'verbose|v',
     ) or pod2usage(-exitval => 2, -verbose => 0);
 pod2usage(-exitval => 0, -verbose => 1) if $args{help};
 pod2usage(-exitval => 0, -verbose => 2) if $args{man};
@@ -206,13 +207,6 @@ if ($args{'remote-name'}){
         exit 7;
     }
 }
-if ($args{output}){
-    open $STDOLD, '>&', STDOUT;
-    open STDOUT, '>', $args{output} or die "Cannot open $args{output} for output.";
-    # binmode(STDOUT, ":raw");
-    # later, to restore STDOUT:
-    # open (STDOUT, '>&', $STDOLD);
-}
 
 if ($url->{scheme} =~ /^http/){
     # HTTP or HTTPS
@@ -269,19 +263,34 @@ if ($args{'cookie-jar'}){
     save_cookie_jar($args{'cookie-jar'}, $cookies);
 }
 
-# close out file and restore STDOUT
-if ($args{output}){
-    close STDOUT;
-    open (STDOUT, '>&', $STDOLD);
-}
 
 # ------- End of main prog ---------------------------------------------------------------
+
+sub redirect_output {
+    if ($args{output}){
+        open $STDOLD, '>&', STDOUT;
+        open STDOUT, '>', $args{output} or die "Cannot open $args{output} for output.";
+        # binmode(STDOUT, ":raw");
+        # later, to restore STDOUT:
+        # open (STDOUT, '>&', $STDOLD);
+    }
+}
+
+# close out file and restore STDOUT
+sub restore_output {
+    if ($args{output}){
+        close STDOUT;
+        open (STDOUT, '>&', $STDOLD);
+    }
+}
 
 sub process_http {
     my $method = shift;
     my $url_final = shift;
 
     my ($IN, $OUT, $ERR, $host, $port, $resp);
+
+    redirect_output();
 
     $max_redirs = $args{'max-redirs'} if defined $args{'max-redirs'};
     my $redirs = $max_redirs;   # redirs is a countdown of remaining allowed redirections
@@ -357,7 +366,15 @@ sub process_http {
         }
     } while ($resp->{byte_len} && $url_final && $redirs >= 0);
   BREAK:
-    
+    restore_output();
+    if ($args{'remote-time'} && $args{output} && $resp->{headers}{'last-modified'}){
+        my $timestamp = $resp->{headers}{'last-modified'};
+        my $epoch = str2epoch($timestamp);
+        if ($epoch > -1){
+            utime($epoch, $epoch, $args{output}) or say STDERR "Cannot set modification time of $args{output}: $!";
+        }
+    }
+
     close $IN;
     close $OUT;
     close $ERR if $ERR;
@@ -376,6 +393,9 @@ sub process_file {
     my $size = (stat $path)[7];
     say STDERR "* size of $path is $size" if $args{debug};
     $resp->{byte_len} = $size;
+
+    redirect_output();
+
     open (my $fh, '<', $path) or die "Couldn't open file $path: $!";
     if (defined $process_action){
         local $/;
@@ -394,6 +414,7 @@ sub process_file {
         }
         close $fh;
     }
+    restore_output();
 }
 
 # transmission of headers + body to the server
@@ -1294,6 +1315,9 @@ sub get_jpath {
 sub process_stomp {
     my $url_final = shift;
     my ($IN, $OUT, $ERR, $host, $port, $resp);
+
+    redirect_output();
+    
     ($OUT, $IN, $ERR) = connect_direct_socket($url_final->{host}, $url_final->{port});
 
     my ($user, $passwd) = ('guest', 'guest');
@@ -1311,6 +1335,8 @@ sub process_stomp {
     close $IN;
     close $OUT;
     close $ERR if $ERR;
+
+    restore_output();
 }
 
 sub send_stomp_request {
@@ -1427,6 +1453,20 @@ sub parse_url {
     return $url;
 }
 
+# try to interpret the Last-Modified timestamp
+sub str2epoch {
+    my $s = shift;
+    my $e = -1;
+    my %months = ( Jan=>0, Feb=>1, Mar=>2, Apr=>3, May=>4, Jun=>5, Jul=>6, Aug=>7, Sep=>8, Oct=>9, Nov=>10, Dec=>11 );
+    # Last-Modified: <nom-jour>, <jour> <mois> <année> <heure>:<minute>:<seconde> GMT
+    if ($s =~ /\w\w\w, (\d\d) (\w\w\w) (\d\d\d\d) (\d\d):(\d\d):(\d\d) GMT/){
+        $e = timegm($6, $5, $4, $1, $months{$2}, $3-1900);
+    } else {
+        say STDERR "* FIXME: cannot interpret Last-Modified timestamp: `$s`";
+    }
+    return $e;
+}
+    
 # perform a string encoding compatible with url
 sub urlencode {
     my $s = shift;
@@ -1652,6 +1692,10 @@ Specify a string for the referer. If followed by ";auto", when following redirec
 =item -O, --remote-name
 
 Write output to a file named as the remote file (that name is extracted from the URL).
+
+=item -R, --remote-time
+
+Set the remote file's time on the local output, if provided by Last-Modified response header.
 
 =item -X, --request <method>
 

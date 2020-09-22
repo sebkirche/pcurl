@@ -150,6 +150,10 @@ Options
         Write output to a file named as the remote file (that name is
         extracted from the URL).
 
+    -R, --remote-time
+        Set the remote file's time on the local output, if provided by
+        Last-Modified response header.
+
     -X, --request <method>
         Specify the method for the request. Common methods are GET, HEAD,
         POST, PUT, TRACE, OPTIONS and DELETE, but you can specify a custom
