@@ -56,80 +56,71 @@ my $def_max_wait = 10;          # default value for response timeout
 my %defports = ( http  => 80,
                  https => 443 );
 
-my ($url, $cli_url, $auth_basic, $uagent, $http_vers, $tunnel_pid, $auto_ref, $use_cookies, $cookies, $process_action);
-my ($arg_tcpnodelay, $arg_accept, $arg_content, $arg_hlp, $arg_man, $arg_debug, $arg_verbose,
-    $arg_basic, $arg_url, $arg_port, $arg_agent,
-    $arg_cookie, $arg_cookiejar, $arg_debugjson, $arg_debugjson_export, $arg_junk_session_cookies,
-    $arg_httpv09, $arg_httpv10, $arg_httpv11, $arg_include, $arg_include_request, 
-    $arg_method, $arg_info, $arg_follow, $arg_maxredirs, $arg_maxwait, $arg_parse_only,
-    $arg_proxy, $arg_proxy10, $arg_proxyuser, $arg_noproxy, $arg_action, $arg_referer, $arg_remotename,
-    $arg_postdata, $arg_postraw, $arg_postbinary,
-    $arg_stompdest, $arg_stompmsg, $arg_outfile) = (1);
-my @arg_custom_headers;
-my @arg_posturlencode;
+my ($url, $cli_url, $uagent, $http_vers, $tunnel_pid, $auto_ref, $use_cookies, $cookies, $process_action);
+my %args = ( 'tcp-nodelay' => 1, 'data-urlencode' => [], header => []  );
 
-GetOptions(
-    'accept=s'             => \$arg_accept,
-    'action=s'             => \$arg_action,
-    'basic=s'              => \$arg_basic,
-    'content=s'            => \$arg_content,
-    'cookie|b=s'           => \$arg_cookie,
-    'cookie-jar|c=s'       => \$arg_cookiejar,
-    'data-binary=s'        => \$arg_postbinary,
-    'data-raw=s'           => \$arg_postraw,
-    'data-urlencode=s'     => \@arg_posturlencode,
-    'data|data-ascii|d=s'  => \$arg_postdata,
-    'debug'                => \$arg_debug,
-    'debug-json=s'         => \$arg_debugjson,
-    'debug-json-export'    => \$arg_debugjson_export,
-    'header|H=s'           => \@arg_custom_headers,
-    'head|I'               => \$arg_info,
-    'help|h|?'             => \$arg_hlp,
-    'http09'               => \$arg_httpv09,
-    'http10'               => \$arg_httpv10,
-    'http11'               => \$arg_httpv11,
-    'include-response|include|i' => \$arg_include,
-    'include-request'      => \$arg_include_request,
-    'junk-session-cookies' => \$arg_junk_session_cookies,
-    'location|L'           => \$arg_follow,
-    'man'                  => \$arg_man,
-    'max-wait=i'           => \$arg_maxwait,
-    'max-redirs=i'         => \$arg_maxredirs,
-    'noproxy=s'            => \$arg_noproxy,
-    'output|o=s'           => \$arg_outfile,
-    'parse-only'           => \$arg_parse_only, # just show how we parse the URL
-    'port|p=i'             => \$arg_port,
-    'proxy-user|U=s'       => \$arg_proxyuser,
-    'proxy10=s'            => \$arg_proxy10,
-    'proxy|x=s'            => \$arg_proxy,
-    'remote-name|O'        => \$arg_remotename,
-    'referer|e=s'          => \$arg_referer,
-    'request|X=s'          => \$arg_method,
-    # 'stompdest=s'        => \$arg_stompdest,
-    'stompmsg=s'           => \$arg_stompmsg,
-    'tcp-nodelay!'         => \$arg_tcpnodelay,
-    'url=s'                => \$arg_url,
-    'user-agent|A=s'       => \$arg_agent,
-    'verbose|v'            => \$arg_verbose,
+GetOptions(\%args,
+    'accept=s',             
+    'action=s',             
+    'basic=s',              
+    'content=s',            
+    'cookie|b=s',           
+    'cookie-jar|c=s',       
+    'data-binary=s',        
+    'data-raw=s',           
+    'data-urlencode=s@',    
+    'data|data-ascii|d=s',  
+    'debug',                
+    'debug-json=s',         
+    'debug-json-export',    
+    'header|H=s@',
+    'head|I',
+    'help|h|?',
+    'http09',
+    'http10',
+    'http11',
+    'include-response|include|i',
+    'include-request',
+    'junk-session-cookies',
+    'location|L',
+    'man',
+    'max-wait=i',
+    'max-redirs=i',
+    'noproxy=s',
+    'output|o=s',
+    'parse-only',               # just show how we parse the URL
+    'port|p=i',
+    'proxy-user|U=s',
+    'proxy10=s',
+    'proxy|x=s',
+    'remote-name|O',
+    'referer|e=s',
+    'request|X=s',
+    # 'stompdest=s',
+    'stompmsg=s',
+    'tcp-nodelay!',             # negatable: --notcp-nodelay
+    'url=s',
+    'user-agent|A=s',
+    'verbose|v',
     ) or pod2usage(-exitval => 2, -verbose => 0);
-pod2usage(-exitval => 0, -verbose => 1) if $arg_hlp;
-pod2usage(-exitval => 0, -verbose => 2) if $arg_man;
+pod2usage(-exitval => 0, -verbose => 1) if $args{help};
+pod2usage(-exitval => 0, -verbose => 2) if $args{man};
 
-if ($arg_debugjson){
+if ($args{'debug-json'}){
     say STDERR "Testing JSON parser...";
-    if ($arg_debugjson eq '-'){
+    if ($args{'debug-json'} eq '-'){
         my @lines = <STDIN>;
-        $arg_debugjson = join '', @lines;
-    } elsif (-r $arg_debugjson){
-        open (my $fh, '<', $arg_debugjson) or die "Cannot open $arg_debugjson: $!";
+        $args{'debug-json'} = join '', @lines;
+    } elsif (-r $args{'debug-json'}){
+        open (my $fh, '<', $args{'debug-json'}) or die "Cannot open $args{'debug-json'}: $!";
         local $/;
-        $arg_debugjson = <$fh>;
+        $args{'debug-json'} = <$fh>;
         close $fh;
     }
     say STDERR "Reading done. Parsing...";
-    my $obj = from_json($arg_debugjson);
+    my $obj = from_json($args{'debug-json'});
     say STDERR "Parsing done. Dumping...";
-    if ($arg_debugjson_export){
+    if ($args{'debug-json-export'}){
         say to_json($obj);
     } else {
         say Data::Dumper->Dump([$obj],[ 'json' ]);
@@ -138,49 +129,49 @@ if ($arg_debugjson){
 }
 
 # User-Agent
-$uagent = $arg_agent || "pCurl/$VERSION";
+$uagent = $args{'user-agent'} || "pCurl/$VERSION";
 
 # Referer provided, or auto-referer?
 # auto-referer is: take the url of the previous url as referer when following redirects 
-if ($arg_referer && $arg_referer =~ /([^;]*)?;auto/){
+if ($args{referer} && $args{referer} =~ /([^;]*)?;auto/){
     $auto_ref = 1;
-    $arg_referer = $1;
+    $args{referer} = $1;
 }
 
 # Cookies
-if ($arg_cookie || $arg_cookiejar){
+if ($args{cookie} || $args{'cookie-jar'}){
     $use_cookies = 1;
-    if ($arg_cookie){
-        if (-f $arg_cookie){
-            $cookies = load_cookie_jar($arg_cookie);
-            say STDERR "Cookies from jar:", Dumper $cookies if $arg_debug;
-            if ($arg_junk_session_cookies){
+    if ($args{cookie}){
+        if (-f $args{cookie}){
+            $cookies = load_cookie_jar($args{cookie});
+            say STDERR "Cookies from jar:", Dumper $cookies if $args{debug};
+            if ($args{'junk-session-cookies'}){
                 # keep cookies with expiration (if not it's a session cookie)
                 $cookies = [ grep { $_->{expires} } @$cookies ];
             }
         } else {
-            $cookies = load_commandline_cookies($arg_cookie);
-            say STDERR "Cookies from command-line:", Dumper $cookies if $arg_debug;
+            $cookies = load_commandline_cookies($args{cookie});
+            say STDERR "Cookies from command-line:", Dumper $cookies if $args{debug};
         }
     }
     # keep non-expired cookies
     my $now = time;
     $cookies = [ grep { !$_->{expires} || ($_->{expires} >= $now) } @$cookies ];
-    say STDERR "Cookies from jar after purge and expiration:", Dumper $cookies if $arg_debug;
+    say STDERR "Cookies from jar after purge and expiration:", Dumper $cookies if $args{debug};
 }
 
 # shortcut to -H 'Accept: mime'
-if ($arg_accept){
-    push @arg_custom_headers, "Accept: ${arg_accept}";
+if ($args{accept}){
+    push @{$args{header}}, "Accept: $args{accept}";
 }
 
 # Action is either a specific value to extract from the result (header, json field)
 # an can be more sophisticated actions
-if ($arg_action){
-    $process_action = parse_process_action($arg_action);
+if ($args{action}){
+    $process_action = parse_process_action($args{action});
 }
 
-$cli_url = $arg_url || $ARGV[0];
+$cli_url = $args{url} || $ARGV[0];
 unless ($cli_url){
     say STDERR "No url provided...";
     pod2usage(-exitval => 1);
@@ -189,7 +180,7 @@ unless ($url = parse_url($cli_url)){
     say STDERR "It's strange to me that `$cli_url` does not look like an url...";
     exit 1;
 }
-if ($arg_parse_only){
+if ($args{'parse-only'}){
     if ($url){
         for my $k (sort grep { $url->{$_} } keys %$url){
             if (ref $url->{$k} eq 'HASH'){
@@ -207,17 +198,17 @@ if ($arg_parse_only){
 
 # if we want to output in a file, redirect the initial STDOUT
 my $STDOLD;
-if ($arg_remotename){
+if ($args{'remote-name'}){
     if ($url->{path} =~ m{\/([^/]+)$}){
-        $arg_outfile = $1;
+        $args{output} = $1;
     } else {
         say STDERR "Cannot get remote file name from url.";
         exit 7;
     }
 }
-if ($arg_outfile){
+if ($args{output}){
     open $STDOLD, '>&', STDOUT;
-    open STDOUT, '>', $arg_outfile or die "Cannot open $arg_outfile for output.";
+    open STDOUT, '>', $args{output} or die "Cannot open $args{output} for output.";
     # binmode(STDOUT, ":raw");
     # later, to restore STDOUT:
     # open (STDOUT, '>&', $STDOLD);
@@ -227,20 +218,20 @@ if ($url->{scheme} =~ /^http/){
     # HTTP or HTTPS
 
     # version
-    if ($arg_httpv09){
+    if ($args{http09}){
         $http_vers = '0.9';
-    } elsif ($arg_httpv10){
+    } elsif ($args{http10}){
         $http_vers = '1.0';
-    } elsif ($arg_httpv11){
+    } elsif ($args{http11}){
         $http_vers = '1.1';
     } else {
         $http_vers = '1.0'; # default HTTP version when not specified
     }
 
-    if ($arg_method){
-        if ($arg_method =~ /^(GET|HEAD|POST|PUT|TRACE|OPTIONS|DELETE)$/i){
-            $arg_method = uc $arg_method;
-            if ($arg_method ne 'GET' and HTTP09()){
+    if ($args{request}){
+        if ($args{request} =~ /^(GET|HEAD|POST|PUT|TRACE|OPTIONS|DELETE)$/i){
+            $args{request} = uc $args{request};
+            if ($args{request} ne 'GET' and HTTP09()){
                 say STDERR "HTTP/0.9 only supports GET method.\n" ;
                 exit 2;
             }
@@ -250,15 +241,15 @@ if ($url->{scheme} =~ /^http/){
     }
 
     my $method;
-    if ($arg_postdata || @arg_posturlencode || $arg_postbinary || $arg_postraw){
-        $method = $arg_method || 'POST';
+    if ($args{data} || @{$args{'data-urlencode'}} || $args{'data-binary'} || $args{'data-raw'}){
+        $method = $args{request} || 'POST';
     } else {
-        $method = $arg_info ? 'HEAD' : $arg_method || 'GET';
+        $method = $args{head} ? 'HEAD' : $args{request} || 'GET';
     }
     #$url->{path} = '*' if $method eq 'OPTIONS';    
     process_http($method, $url);
 } elsif ($url->{scheme} =~ /^stomp/){
-    unless ($url->{path} && $arg_stompmsg){
+    unless ($url->{path} && $args{stompmsg}){
         say STDERR "Message sending with --stompmsg <message> is supported for now.";
         exit 3;
     }
@@ -274,12 +265,12 @@ if ($url->{scheme} =~ /^http/){
 }
 
 # save the cookie jar if requested
-if ($arg_cookiejar){
-    save_cookie_jar($arg_cookiejar, $cookies);
+if ($args{'cookie-jar'}){
+    save_cookie_jar($args{'cookie-jar'}, $cookies);
 }
 
 # close out file and restore STDOUT
-if ($arg_outfile){
+if ($args{output}){
     close STDOUT;
     open (STDOUT, '>&', $STDOLD);
 }
@@ -292,10 +283,10 @@ sub process_http {
 
     my ($IN, $OUT, $ERR, $host, $port, $resp);
 
-    $max_redirs = $arg_maxredirs if defined $arg_maxredirs;
+    $max_redirs = $args{'max-redirs'} if defined $args{'max-redirs'};
     my $redirs = $max_redirs;   # redirs is a countdown of remaining allowed redirections
     do {
-        say STDERR "* Processing url $url_final->{url}" if $arg_verbose || $arg_debug;
+        say STDERR "* Processing url $url_final->{url}" if $args{verbose} || $args{debug};
         my $url_proxy = get_proxy_settings($url_final);
         my $pheaders = [];
         if ($url_proxy){
@@ -322,7 +313,7 @@ sub process_http {
             map { push @$headers, $_ } @$pheaders;
         }
 
-        say STDERR "* Sending request to server" if $arg_verbose || $arg_debug;
+        say STDERR "* Sending request to server" if $args{verbose} || $args{debug};
 
         # Write to the server
         send_http_request($IN, $OUT, $ERR, $headers, $body);
@@ -332,27 +323,27 @@ sub process_http {
 
         # Receive the response
         $resp = process_http_response($IN, $ERR, $url_final, $url_proxy, $need_capture);
-        say STDERR Dumper $resp->{headers} if $arg_debug;
-        say STDERR "* received $resp->{byte_len} bytes" if $arg_verbose || $arg_debug;
+        say STDERR Dumper $resp->{headers} if $args{debug};
+        say STDERR "* received $resp->{byte_len} bytes" if $args{verbose} || $args{debug};
         if ($resp->{byte_len}){
             my $code = $resp->{status}{code};
-            if ($arg_follow && (300 <= $code) && ($code <= 399)){
+            if ($args{location} && (300 <= $code) && ($code <= 399)){
                 # if the result is a redirect, follow it
                 unless($redirs){
                     say STDERR sprintf("* Maximum (%d) redirects followed", $max_redirs);
                     goto BREAK;
                 }
-                $arg_referer = $url_final->{url} if $auto_ref;      # use previous url as next referer
+                $args{referer} = $url_final->{url} if $auto_ref;      # use previous url as next referer
                 my ($old_scheme, $old_host, $old_port) = ($url_final->{scheme}, $url_final->{host}, $url_final->{port});
                 $url_final = parse_url($resp->{headers}{location}); # get redirected url
                 # compare new url with previous and reconnected if needed
                 if (($url_final->{scheme} ne $old_scheme) || ($url_final->{host} ne $old_host) || ($url_final->{port} != $old_port)){
-                    say STDERR "* Closing connection because of scheme/server redirect" if $arg_verbose || $arg_debug;
+                    say STDERR "* Closing connection because of scheme/server redirect" if $args{verbose} || $args{debug};
                     close $IN;
                     close $OUT;
                     close $ERR if $ERR;
                 }
-                say STDERR sprintf("* Redirecting #%d to %s", $max_redirs - $redirs,  $url_final->{url}) if $arg_verbose || $arg_debug;
+                say STDERR sprintf("* Redirecting #%d to %s", $max_redirs - $redirs,  $url_final->{url}) if $args{verbose} || $args{debug};
                 $redirs--;
             } else {
                 # result other than redirect
@@ -383,7 +374,7 @@ sub process_file {
         exit 6;
     }
     my $size = (stat $path)[7];
-    say STDERR "* size of $path is $size" if $arg_debug;
+    say STDERR "* size of $path is $size" if $args{debug};
     $resp->{byte_len} = $size;
     open (my $fh, '<', $path) or die "Couldn't open file $path: $!";
     if (defined $process_action){
@@ -411,12 +402,12 @@ sub send_http_request {
     
     push @$headers, '';         # empty line to terminate request
     
-    if ($arg_verbose){
+    if ($args{verbose}){
         print STDERR "> $_\n" for @$headers;
     }
     my $headers_txt = join "", map { "$_\r\n" } @$headers;
     print $OUT $headers_txt;    # send headers to server
-    print STDOUT $headers_txt if $arg_include_request;
+    print STDOUT $headers_txt if $args{'include-request'};
 
     if (defined $body){
         my $sent = 0;
@@ -429,11 +420,11 @@ sub send_http_request {
             print $OUT $body if $body;
             $sent = length $body;
         }
-        say STDERR "* upload completely sent off: $sent bytes" if $arg_verbose || $arg_debug;
+        say STDERR "* upload completely sent off: $sent bytes" if $args{verbose} || $args{debug};
     }
     
     $OUT->flush;
-    say STDERR "* HTTP request sent" if $arg_debug;
+    say STDERR "* HTTP request sent" if $args{debug};
 }
 
 # check if we need to connect to a proxy
@@ -443,7 +434,7 @@ sub get_proxy_settings {
     my $proxy;
 
     # if we match an explicit no_proxy argument or no_proxy environment, get out
-    my $no_p = $arg_noproxy || $ENV{no_proxy};
+    my $no_p = $args{noproxy} || $ENV{no_proxy};
     if ($no_p){
         $no_p =~ s/,/|/g;
         $no_p =~ s/\./\\./g;
@@ -454,10 +445,10 @@ sub get_proxy_settings {
     }
     
     my $proxy_set;
-    if ($arg_proxy){
-        $proxy_set = $arg_proxy;
-    } elsif ($arg_proxy10){
-        $proxy_set = $arg_proxy10;
+    if ($args{proxy}){
+        $proxy_set = $args{proxy};
+    } elsif ($args{proxy10}){
+        $proxy_set = $args{proxy10};
     } elsif ($url_final->{scheme} eq 'http'){
         $proxy_set = $ENV{http_proxy};
     } elsif ($url_final->{scheme} eq 'https'){
@@ -470,7 +461,7 @@ sub get_proxy_settings {
         say STDERR "It's strange to me that `$url` does not look as an url for proxy...";
         exit 4;
     }
-    say STDERR "* Using proxy $proxy->{url}" if $arg_verbose || $arg_debug;
+    say STDERR "* Using proxy $proxy->{url}" if $args{verbose} || $args{debug};
     return $proxy;
 }
 
@@ -498,7 +489,7 @@ sub build_http_request_headers {
 
         # process the custom headers
         my %custom;
-        for my $ch (@arg_custom_headers){
+        for my $ch (@{$args{header}}){
             # curl man: Remove an internal header by giving a replacement without content
             #           on the right side of the colon, as in: -H "Host:".
             #           If you send the custom header with no-value then its header must be terminated with a semicolon,
@@ -531,20 +522,20 @@ sub build_http_request_headers {
         add_http_header($headers, \%custom, 'User-Agent', ${uagent});
         add_http_header($headers, \%custom, 'Accept', '*/*');
         add_http_header($headers, \%custom, 'Connection', 'close');
-        my $auth = $arg_basic || $u->{auth};
+        my $auth = $args{basic} || $u->{auth};
         add_http_header($headers, \%custom, 'Authorization', 'Basic ' . encode_base64($auth, '')) if $auth;
-        add_http_header($headers, \%custom, 'Referer', $arg_referer) if defined $arg_referer;
-        add_http_header($headers, \%custom, 'Content-Type', $arg_content) if defined $arg_content;
+        add_http_header($headers, \%custom, 'Referer', $args{referer}) if defined $args{referer};
+        add_http_header($headers, \%custom, 'Content-Type', $args{content}) if defined $args{content};
         
         if (defined $body){
             if (ref $body eq 'HASH'){
                 # if ($body->{kind} eq 'stdin'){
                     add_http_header($headers, \%custom, 'Content-Length', $body->{size});
-                    add_http_header($headers, \%custom, 'Content-type', $body->{ctype}) unless defined $arg_content;
+                    add_http_header($headers, \%custom, 'Content-type', $body->{ctype}) unless defined $args{content};
                 # }
             } else {
                 add_http_header($headers, \%custom, 'Content-Length', length $body);
-                add_http_header($headers, \%custom, 'Content-type', 'application/x-www-form-urlencoded') unless defined $arg_content;
+                add_http_header($headers, \%custom, 'Content-type', 'application/x-www-form-urlencoded') unless defined $args{content};
             }
         }
         map { push @$headers, $custom{$_} if defined $custom{$_} } keys %custom;
@@ -572,10 +563,10 @@ sub add_http_header {
 
 # When POSTing data, compute length, content-type and data to POST
 sub prepare_http_body_to_post{
-    my $post = $arg_postdata || $arg_postbinary || $arg_postraw;
+    my $post = $args{data} || $args{'data-binary'} || $args{'data-raw'};
     if ($post){
-        if ($arg_postraw){
-            return $arg_postraw; # we do not interpret the @ in raw mode
+        if ($args{'data-raw'}){
+            return $args{'data-raw'}; # we do not interpret the @ in raw mode
         } elsif ($post =~ /^@(.*)/){
             if ($1){
                 my $fd;
@@ -591,12 +582,12 @@ sub prepare_http_body_to_post{
                     };
                 }
                 my $data;
-                if ($arg_postdata){
+                if ($args{data}){
                     while (my $l = <$fd>){
                         $l =~ s/[\r\n]+//g;
                         $data .= $l;
                     }
-                } elsif ($arg_postbinary){
+                } elsif ($args{'data-binary'}){
                     my $buf_size = 1024 * 1024;
                     while(my $block = $fd->sysread(my $buf, $buf_size)){
                         # syswrite $OUT, $buf, $block;
@@ -613,11 +604,11 @@ sub prepare_http_body_to_post{
                 };
             }
         } else {
-            return $arg_postdata; # it's a plain text 
+            return $args{data}; # it's a plain text 
         }        
-    } elsif (@arg_posturlencode){
+    } elsif (@{$args{'data-urlencode'}}){
         my @encoded;
-        for my $data (@arg_posturlencode){
+        for my $data (@{$args{'data-urlencode'}}){
             $data =~ s/^(\w+)=(.*)/"$1=" . urlencode($2)/e;
             push @encoded, $data;
         }
@@ -633,13 +624,13 @@ sub build_http_proxy_headers {
     my $headers = [];
 
     if ($u->{scheme} eq 'https'){
-        if ($arg_proxy10 || HTTP10()){
+        if ($args{proxy10} || HTTP10()){
             push @$headers, "CONNECT $u->{host}:$u->{port} HTTP/1.0";
         } elsif (HTTP11()){
             push @$headers, "CONNECT $u->{host}:$u->{port} HTTP/1.1";
         }
     }
-    my $auth = $arg_proxyuser || $p->{auth};
+    my $auth = $args{'proxy-user'} || $p->{auth};
     push @$headers, 'Proxy-Authorization: Basic ' . encode_base64($auth) if $auth;
     if (HTTP11()){
         # push @$headers, 'Proxy-Connection: close';
@@ -677,29 +668,29 @@ sub process_http_response {
     $selector->add($ERR) if $ERR;
     $selector->add($IN);
 
-    say STDERR "* Processing response" if $arg_debug;
+    say STDERR "* Processing response" if $args{debug};
 
     # reading loop on both server output and errors, with a timeout
-    while (my @ready = $selector->can_read($arg_maxwait || $def_max_wait)) {
+    while (my @ready = $selector->can_read($args{'max-wait'} || $def_max_wait)) {
         foreach my $fh (@ready) {
             if ($ERR && (fileno($fh) == fileno($ERR))) {
                 my $line = <$fh>;
                 $line =~ s/[\r\n]+$//;
-                say STDERR "* proxy/tunnel STDERR: $line" if $arg_debug;
+                say STDERR "* proxy/tunnel STDERR: $line" if $args{debug};
                 if ($url_final->{tunneled} && ($line =~ /^s_client: HTTP CONNECT failed: (\d+) (.*)/)){
                     my $err_txt = sprintf("Received '%d %s' from tunnel after CONNECT", $1, $2);
                     say STDERR $err_txt;
                     exit 5;
                 }
             } elsif (fileno($fh) == fileno($IN)) {
-                say STDERR "* processing STDIN" if $arg_debug;
+                say STDERR "* processing STDIN" if $args{debug};
                 if (! $headers_done && !HTTP09()){ # there is no header in HTTP/0.9
                     # local $/ = "\r\n";
                   HEAD: while(defined (my $line = <$IN>)){
                       $received += length($line);
                       $line =~ s/[\r\n]+$//;
-                      say STDERR '< ', $line if $arg_verbose || $arg_debug;
-                      say STDOUT $line if !$need_capture && $arg_info || $arg_include;
+                      say STDERR '< ', $line if $args{verbose} || $args{debug};
+                      say STDOUT $line if !$need_capture && $args{head} || $args{'include-response'};
                       if ($line =~ /^$/){
                           $headers_done++;
                           last HEAD;
@@ -724,13 +715,13 @@ sub process_http_response {
                                       if ($cookies->[$c]->{domain} eq $hcook->{domain}
                                           && $cookies->[$c]->{path} eq $hcook->{path}
                                           && $cookies->[$c]->{name} eq $hcook->{name}){
-                                          say STDERR "Replacing cookie ".$hcook->{name} if $arg_debug;
+                                          say STDERR "Replacing cookie ".$hcook->{name} if $args{debug};
                                           splice @$cookies, $c, 1, $hcook;
                                           next HCOOKIE;
                                       }
                                   }
                                   # if we arrive here, the cookie was not found, add it
-                                  say STDERR "Adding cookie ".$hcook->{name} if $arg_debug;
+                                  say STDERR "Adding cookie ".$hcook->{name} if $args{debug};
                                   push @$cookies, $hcook;
                               }
                           }
@@ -754,28 +745,28 @@ sub process_http_response {
                 } # end of headers processing
                 # we show body contents only when not following redirects
                 my $is_redirected = $resp{status} && $resp{status}{code} && $resp{status}{code} =~ /^3/;
-                say STDERR "* Ignoring the response-body" if ($is_redirected && $arg_follow) && (! $fh->eof ) && ($arg_verbose || $arg_debug);
+                say STDERR "* Ignoring the response-body" if ($is_redirected && $args{location}) && (! $fh->eof ) && ($args{verbose} || $args{debug});
                 binmode(STDOUT, ":raw"); # pass in raw layer to prevent utf8 or cr/lf conversion in binary files
                 unless ($fh->eof){ # loop on the remaining of response
                     $content_length = $headers{'content-length'};
                     if ($content_length){
-                        say STDERR "* need to read $content_length bytes in response..." if $arg_debug;
+                        say STDERR "* need to read $content_length bytes in response..." if $args{debug};
                     } else {
-                        say STDERR "* Unknown size of response to read..." if $arg_debug;
+                        say STDERR "* Unknown size of response to read..." if $args{debug};
                     }
                     my $buf_size = 2 * 1024 * 1024;
                     my $block = $fh->read(my $buf, $buf_size);
                     if ($block){
-                        say STDERR "* Read $block bytes" if $arg_debug;
+                        say STDERR "* Read $block bytes" if $args{debug};
                         $received += $block;
-                        print STDOUT $buf unless ($is_redirected && $arg_follow);
+                        print STDOUT $buf unless ($is_redirected && $args{location});
                     }
                 }
                 # there may have additional info... (body > Content-Length)
             };
             
             if (eof($fh)){
-               say STDERR "* Nothing left in the filehandle $fh" if $arg_debug;
+               say STDERR "* Nothing left in the filehandle $fh" if $args{debug};
                $selector->remove($fh);
             }
         }
@@ -784,13 +775,13 @@ sub process_http_response {
     $resp{byte_len} = $received; # keep the size of read data
     if ($need_capture){
         # restore the output to the original value before capture
-        say STDERR sprintf("* Captured %d bytes:\n%s", length $capture, $capture) if $arg_verbose || $arg_debug;
+        say STDERR sprintf("* Captured %d bytes:\n%s", length $capture, $capture) if $args{verbose} || $args{debug};
         $resp{captured} = \$capture;
         close STDOUT;
         open (STDOUT, '>&', $STDOUT_UNCAPTURED);
     }
-    say STDERR "Parsed cookies: ", Dumper $cookies if $arg_debug;
-    say STDERR "* end of response" if $arg_debug;
+    say STDERR "Parsed cookies: ", Dumper $cookies if $args{debug};
+    say STDERR "* end of response" if $args{debug};
     return \%resp;
 }
 
@@ -899,7 +890,7 @@ sub parse_cookie_header {
         eval { m{$rx}; } and $cookies = $_;
     }
     if ($cookies){
-        say STDERR Dumper $cookies if $arg_debug;
+        say STDERR Dumper $cookies if $args{debug};
         # sanitize cookies: without domain or path, use url current values
         for my $c (@$cookies){
             $c->{domain} = $url->{host} unless $c->{domain};
@@ -1008,7 +999,7 @@ sub parse_process_action {
             $action = { action => 'print', args => { what => 'json', value => $2 } };
         }
     } # else {} parse json
-    say STDERR "Procession action:" . Dumper $action if $arg_debug;
+    say STDERR "Procession action:" . Dumper $action if $args{debug};
     return $action;
 }
 
@@ -1040,7 +1031,7 @@ sub perform_action {
 }
 
 sub TRACE_JSON {
-    return $arg_debugjson ? 1 : 0;
+    return $args{'debug-json'} ? 1 : 0;
 }
 
 my @eval_stack; my $trace_indent; my $object_count;
@@ -1251,7 +1242,7 @@ sub get_jpath {
         $fullpath = $path;              # keep a copy of initial path for reference in errors
         $path = [ split /\//, $path ] ; # for first call path is not an array ref
     }
-    print STDERR "Path: " . join(' / ', @$path) . "\n" if $arg_debug;
+    print STDERR "Path: " . join(' / ', @$path) . "\n" if $args{debug};
     my $p = shift @$path;       # next element to get from path
     my $v;                      # placeholder for data
     if (ref $ref eq 'ARRAY'){
@@ -1310,7 +1301,7 @@ sub process_stomp {
     send_stomp_request($OUT, $IN, $connect);
     $resp = process_stomp_response($IN);
     if ($resp->{command} eq 'CONNECTED'){
-        my $body = $arg_stompmsg;
+        my $body = $args{stompmsg};
         my $len = length($body);
         my $type = 'text/plain';
         send_stomp_request($OUT, $IN, [ 'SEND', "destination:$url_final->{path}", "content-type:${type}", "content-length:${len}" ], $body );
@@ -1324,7 +1315,7 @@ sub process_stomp {
 
 sub send_stomp_request {
     my ($OUT, $IN, $headers, $body) = @_;
-    if ($arg_verbose){
+    if ($args{verbose}){
         say STDOUT "> $_" for @$headers;
     }
     my $request = join( "\n", @$headers ) . "\n\n" . ($body || '') . "\000";
@@ -1337,7 +1328,7 @@ sub process_stomp_response {
     $selector->add($IN);
     my %frame;
     
-    while (my @ready = $selector->can_read($arg_maxwait || $def_max_wait)) {
+    while (my @ready = $selector->can_read($args{'max-wait'} || $def_max_wait)) {
         foreach my $fh (@ready) {
             if (fileno($fh) == fileno($IN)) {
                 my $buf_size = 1024 * 1024;
@@ -1346,7 +1337,7 @@ sub process_stomp_response {
                     if ($buf =~ s/^\n*([^\n].*?)\n\n//s){
                         my $headers = $1;
                         for my $line (split /\n/,  $headers){
-                            say STDOUT "< $line" if $arg_verbose || $arg_debug;
+                            say STDOUT "< $line" if $args{verbose} || $args{debug};
                             if ($line =~ /^(\w+)$/){
                                 $frame{command} = $1;
                             }
@@ -1406,7 +1397,7 @@ sub parse_url {
         };
     }
     $url->{host} = $+{HOST};
-    $url->{port} = $arg_port || $+{PORT};
+    $url->{port} = $args{port} || $+{PORT};
     unless ($url->{port}){
         if ($url->{scheme} eq 'http'){
             $url->{port} = 80;
@@ -1429,7 +1420,7 @@ sub parse_url {
         $url->{path} = substr($url->{path}, 2);
     }
     $url->{params} = $+{PARAMS};
-    if ($arg_debug){
+    if ($args{debug}){
         say STDERR "* Parsed URL '$given'";
         say(STDERR "*  $_ = " . (defined $url->{$_} ? $url->{$_} : "undef")) for(sort(keys %$url));
     }
@@ -1472,12 +1463,12 @@ sub connect_direct_socket {
     my $sock = new IO::Socket::INET(PeerAddr => $host,
                                     PeerPort => $port,
                                     Proto    => 'tcp') or die "Can't connect to $host:$port\n";
-    if ($arg_tcpnodelay){
+    if ($args{'tcp-nodelay'}){
         $sock->setsockopt(IPPROTO_TCP, TCP_NODELAY, 1);
-        say STDERR "* TCP_NODELAY set" if $arg_verbose || $arg_debug;
+        say STDERR "* TCP_NODELAY set" if $args{verbose} || $args{debug};
     }
     $sock->autoflush(1);
-    say STDERR "* connected to $host:$port" if $arg_verbose || $arg_debug;
+    say STDERR "* connected to $host:$port" if $args{verbose} || $args{debug};
     
     return $sock, $sock, undef;
 }
@@ -1495,11 +1486,11 @@ sub connect_ssl_tunnel {
     my $cmd = "openssl s_client -connect ${host}:${port} -servername ${host} -quiet";# -quiet -verify_quiet -partial_chain';
     $cmd .= " -proxy ${phost}:${pport}" if $phost;
     $tunnel_pid = open3(*CMD_IN, *CMD_OUT, *CMD_ERR, $cmd);
-    say STDERR "* connected via OpenSSL to $host:$port" if $arg_verbose || $arg_debug;
-    say STDERR "* command = $cmd" if $arg_debug;
+    say STDERR "* connected via OpenSSL to $host:$port" if $args{verbose} || $args{debug};
+    say STDERR "* command = $cmd" if $args{debug};
 
     $SIG{CHLD} = sub {
-        print STDERR "* REAPER: status $? on ${tunnel_pid}\n" if waitpid($tunnel_pid, 0) > 0 && $arg_debug;
+        print STDERR "* REAPER: status $? on ${tunnel_pid}\n" if waitpid($tunnel_pid, 0) > 0 && $args{debug};
     };
     return *CMD_IN, *CMD_OUT, *CMD_ERR;
 }
