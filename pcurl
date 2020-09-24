@@ -22,7 +22,7 @@ use Socket qw(IPPROTO_TCP TCP_NODELAY);
 use Time::Local;
 # use Carp::Always;
 
-our $VERSION = '0.7.6';
+our $VERSION = '0.7.7';
 $|++; # auto flush messages
 
 $Data::Dumper::Sortkeys = 1;
@@ -103,9 +103,15 @@ GetOptions(\%args,
            'url=s',
            'user-agent|A=s',
            'verbose|v',
+           'version|V'
     ) or pod2usage(-exitval => 2, -verbose => 0);
 pod2usage(-exitval => 0, -verbose => 1) if $args{help};
 pod2usage(-exitval => 0, -verbose => 2) if $args{man};
+
+if ($args{version}){
+    say "pcurl $VERSION";
+    exit 0;
+}
 
 if ($args{'debug-json'}){
     say STDERR "Testing JSON parser...";
@@ -1508,7 +1514,7 @@ sub connect_direct_socket {
         say STDERR "* TCP_NODELAY set" if $args{verbose} || $args{debug};
     }
     $sock->autoflush(1);
-    say STDERR "* connected to $host:$port" if $args{verbose} || $args{debug};
+    say STDERR "* connected to $host port $port" if $args{verbose} || $args{debug};
     
     return $sock, $sock, undef;
 }
@@ -1716,6 +1722,10 @@ Specify a string for User-Agent. If not specified the default User-Agent is 'pcu
 =item -v, --verbose
 
 Show both headers during the communication.
+
+=item -V, --version
+
+Show version number and quit.
 
 =back
 

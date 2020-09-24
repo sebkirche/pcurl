@@ -174,6 +174,9 @@ Options
     -v, --verbose
         Show both headers during the communication.
 
+    -V, --version
+        Show version number and quit.
+
 Actions
 -------
 
