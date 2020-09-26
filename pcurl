@@ -549,7 +549,7 @@ sub build_http_request_headers {
         add_http_header($headers, \%custom, 'User-Agent', ${uagent});
         add_http_header($headers, \%custom, 'Accept', '*/*');
         add_http_header($headers, \%custom, 'Connection', 'close');
-        my $auth = $args{basic} || $u->{auth}{user} . ':' . $u->{auth}{password};
+        my $auth = $args{basic} || ($u->{auth} ? $u->{auth}{user} . ':' . $u->{auth}{password} : undef);
         add_http_header($headers, \%custom, 'Authorization', 'Basic ' . encode_base64($auth, '')) if $auth;
         add_http_header($headers, \%custom, 'Referer', $args{referer}) if defined $args{referer};
         add_http_header($headers, \%custom, 'Content-Type', $args{content}) if defined $args{content};
