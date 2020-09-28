@@ -551,6 +551,10 @@ sub build_http_request_headers {
         add_http_header($headers, \%custom, 'Connection', 'close');
         my $auth = $args{basic} || ($u->{auth} ? $u->{auth}{user} . ':' . $u->{auth}{password} : undef);
         add_http_header($headers, \%custom, 'Authorization', 'Basic ' . encode_base64($auth, '')) if $auth;
+        # if ($u->{tunneled}){
+            # my $auth = $args{'proxy-user'} || ($p->{auth} ? $p->{auth}{user} . ':' . $p->{auth}{password} : undef);
+            # add_http_header($headers, \%custom, 'Proxy-Authorization', 'Basic ' . encode_base64($auth, '')) if $auth;
+        # }
         add_http_header($headers, \%custom, 'Referer', $args{referer}) if defined $args{referer};
         add_http_header($headers, \%custom, 'Content-Type', $args{content}) if defined $args{content};
         
@@ -646,8 +650,8 @@ sub prepare_http_body_to_post{
 }
 
 sub build_http_proxy_headers {
-    my $p = shift;
-    my $u = shift;
+    my $p = shift;              # proxy url
+    my $u = shift;              # url to retrieve
     my $headers = [];
 
     if ($u->{scheme} eq 'https'){
@@ -657,7 +661,7 @@ sub build_http_proxy_headers {
             push @$headers, "CONNECT $u->{host}:$u->{port} HTTP/1.1";
         }
     }
-    my $auth = $args{'proxy-user'} || $p->{auth}{user} . ':' . $p->{auth}{password};
+    my $auth = $args{'proxy-user'} || ($p->{auth} ? $p->{auth}{user} . ':' . $p->{auth}{password} : undef);
     push @$headers, 'Proxy-Authorization: Basic ' . encode_base64($auth) if $auth;
     if (HTTP11()){
         # push @$headers, 'Proxy-Connection: close';
