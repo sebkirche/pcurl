@@ -104,6 +104,13 @@ Options
     --include-request
         Include the request headers in the output.
 
+    --json-pp
+        When using a json action (see --action), pretty-print the json.
+
+    --json-pp-indent
+        When using --json-pp-indent, number of space characters to use for
+        each level of indentation (default = 2).
+
     --junk-session-cookies
         When using -b, --cookie and loading cookies from file, purge the
         session cookies (those with no expire date).

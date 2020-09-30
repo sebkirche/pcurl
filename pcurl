@@ -9,6 +9,7 @@
 use warnings;
 use strict;
 use feature 'say';
+use feature 'state';
 use utf8;
 use open ':std', ':encoding(UTF-8)';
 use Data::Dumper;
@@ -22,7 +23,7 @@ use Socket qw(IPPROTO_TCP TCP_NODELAY);
 use Time::Local;
 # use Carp::Always;
 
-our $VERSION = '0.7.7';
+our $VERSION = '0.7.8';
 $|++; # auto flush messages
 
 $Data::Dumper::Sortkeys = 1;
@@ -57,7 +58,7 @@ my %defports = ( http  => 80,
                  https => 443 );
 
 my ($url, $cli_url, $uagent, $http_vers, $tunnel_pid, $auto_ref, $use_cookies, $cookies, $process_action);
-my %args = ( 'tcp-nodelay' => 1, 'data-urlencode' => [], header => []  );
+my %args = ( 'tcp-nodelay' => 1, 'data-urlencode' => [], header => [], 'json-pp-indent' => 2 );
 
 GetOptions(\%args,
            'accept=s',
@@ -81,6 +82,8 @@ GetOptions(\%args,
            'http11',
            'include-response|include|i',
            'include-request',
+           'json-pp',
+           'json-pp-indent=i',
            'junk-session-cookies',
            'location|L',
            'man',
@@ -1021,13 +1024,13 @@ sub parse_process_action {
     my $action;
     if ($param =~ /^(\w+):(.*)/){
         my $type = $1;
-        my $param = $2;
+        my $param = $2 || '';
         if ($type eq 'header'){
-            $action = { action => 'print', args => { what => 'header', value => $2 } };
+            $action = { action => 'print', args => { what => 'header', value => $param } };
         } elsif ($type eq 'bodyrx'){
-            $action = { action => 'grep', args => { what => 'body', value => $2 } };
+            $action = { action => 'grep', args => { what => 'body', value => $param } };
         } elsif ($type eq 'json'){
-            $action = { action => 'print', args => { what => 'json', value => $2 } };
+            $action = { action => 'print', args => { what => 'json', value => $param } };
         }
     } # else {} parse json
     say STDERR "Procession action:" . Dumper $action if $args{debug};
@@ -1230,20 +1233,40 @@ sub to_json {
     # return 'expecting a hashref as input' unless ref $h eq 'HASH';
 
     my $j;
+    state $level = 0;
+    my $indent = $args{'json-pp-indent'};
     if (!defined $data){
         $j = "null";
     } elsif (ref $data eq 'HASH'){
+        $j = '{';
+        $level++;
         my @items;
         for my $k (keys %$data){
             my $v = $data->{$k};
             my $c = to_json($v);
-            push @items, '"' . $k . '":' . $c;
+            push @items, '"' . $k . '":' . ($args{'json-pp'} ? ' ' : '') . $c;
         }
-        $j = '{' . join(',', @items) . '}';
+        if ($args{'json-pp'}){
+            $j .= "\n" . (' ' x $indent x $level) . join(",\n" . (' ' x $indent x $level), @items) . "\n";
+        } else {
+            $j .= join(',', @items);
+        }
+        $level--;
+        $j .= (' ' x $indent x $level) if $args{'json-pp'};
+        $j .= '}';
     } elsif (ref $data eq 'ARRAY'){
         my @items;
+        $j = '[';
+        $level++;
         (push @items, to_json($_)) for @$data;
-        $j = '[' . join(',', @items) . ']';
+        if ($args{'json-pp'}){
+            $j .= "\n" . (' ' x $indent x $level) . join(",\n" . (' ' x $indent x $level), @items) . "\n";
+        } else {
+            $j .= join(',', @items) . ']';
+        }
+        $level--;
+        $j .= (' ' x $indent x $level) if $args{'json-pp'};
+        $j .= ']';
     } elsif ($data =~ /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/){
         $j = eval $&; # $& = last successful match
     } elsif ($data =~ /true/i){
@@ -1274,7 +1297,7 @@ sub get_jpath {
         $path = [ split /\//, $path ] ; # for first call path is not an array ref
     }
     print STDERR "Path: " . join(' / ', @$path) . "\n" if $args{debug};
-    my $p = shift @$path;       # next element to get from path
+    my $p = shift @$path || '';       # next element to get from path
     my $v;                      # placeholder for data
     if (ref $ref eq 'ARRAY'){
         if ($p =~ /\[(\d*)\]/){ # we try to access by index
@@ -1650,6 +1673,14 @@ Include the response headers in the output.
 =item --include-request
 
 Include the request headers in the output.
+
+=item --json-pp
+
+When using a json action (see --action), pretty-print the json.
+
+=item --json-pp-indent
+
+When using --json-pp-indent, number of space characters to use for each level of indentation (default = 2).
 
 =item --junk-session-cookies
 
