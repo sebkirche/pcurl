@@ -195,6 +195,7 @@ Action can be of type:
     * `pcurl https://jsonplaceholder.typicode.com/users/1 --action='json:id'` => `1`
     * `pcurl http://jsonplaceholder.typicode.com/users --action='json:[3]/address/geo'` => `{"lng":-164.299,"lat":29.4572}`
     * `pcurl http://jsonplaceholder.typicode.com/users --action='json:[3]/address/geo/lat'` => `29.4572`
+    * `pcurl https://www.w3schools.com/xml/simple.xml --action 'xml:breakfast_menu/food/length()' => 5`
 
 * regex: display the match of a regex on the response body
 
@@ -209,3 +210,5 @@ Return codes
 * 5 : HTTP CONNECT failed for tunnel
 * 6 : cannot access the file via file: protocol
 * 7 : cannot get remote file name from url
+* 8 : cannot parse result as JSON for action
+* 9 : cannot parse result as XML for action
