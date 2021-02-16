@@ -2413,7 +2413,7 @@ Specify an accepted MIME type. This is simply a shortcut for -H 'Accept: your/ty
 
 Perform an action on the response. It can be the display of a value (from header, regex on body, json path).
 
-=item --basic <user:password>
+=item --basic, --user <user:password>
 
 Use basic http authentication. Sepcified in the form user:password it is passed to the server in Base64 encoding.
 
@@ -2476,6 +2476,10 @@ When using a json action (see --action), pretty-print the json.
 =item --json-pp-indent
 
 When using --json-pp-indent, number of space characters to use for each level of indentation (default = 2).
+
+=item --json-stringify-null
+
+When parsing json, replace null values by the string 'null'
 
 =item --junk-session-cookies
 
