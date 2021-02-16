@@ -1315,10 +1315,15 @@ sub get_jpath {
         $path = [ split /\//, $path ] ; # for first call path is not an array ref
     }
     print STDERR "Path: " . join(' / ', @$path) . "\n" if $args{debug};
-    my $p = shift @$path || '';       # next element to get from path
+    my $p = shift @$path || ''; # next element to get from path
     my $v;                      # placeholder for data
+    if ($p =~ /(.+)(\[[^]]?\])$/){
+        # support foo[] and foo/[] in the path
+        $p = $1;
+        unshift @$path, $2;
+    }        
     if (ref $ref eq 'ARRAY'){
-        if ($p =~ /\[(\d*)\]/){ # we try to access by index
+        if ($p =~ /^\[(\d*)\]$/){ # we try to access by index
             my $index = eval $1;
             die "eval issue of `$1`: ".$@ if $@;
             if (defined $index && $index ne ''){

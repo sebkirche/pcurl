@@ -200,6 +200,7 @@ Action can be of type:
     * `pcurl http://jsonplaceholder.typicode.com/users --action='json:[3]/address/geo'` => `{"lng":-164.299,"lat":29.4572}`
     * `pcurl http://jsonplaceholder.typicode.com/users --action='json:[3]/address/geo/lat'` => `29.4572`
     * `pcurl https://www.w3schools.com/xml/simple.xml --action 'xml:breakfast_menu/food/length()' => 5`
+    * note: `foo/[42]` is equivalent to `foo[42]`
 
 * regex: display the match of a regex on the response body
 
