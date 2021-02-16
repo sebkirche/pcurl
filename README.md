@@ -44,6 +44,7 @@ Options
         (from header, regex on body, json path)
 
     --basic <user:password>
+    --user  <user:password>
         Use basic http authentication. Sepcified in the form user:password
         it is passed to the server in Base64 encoding.
 
@@ -110,6 +111,9 @@ Options
     --json-pp-indent
         When using --json-pp-indent, number of space characters to use for
         each level of indentation (default = 2).
+
+    --json-stringify-null
+        When parsing json, replace null values by the string 'null'
 
     --junk-session-cookies
         When using -b, --cookie and loading cookies from file, purge the

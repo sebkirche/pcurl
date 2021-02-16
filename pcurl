@@ -63,7 +63,7 @@ my %args = ( 'tcp-nodelay' => 1, 'data-urlencode' => [], header => [], 'json-pp-
 GetOptions(\%args,
            'accept=s',
            'action=s',
-           'basic=s',
+           'basic|user=s',
            'content=s',
            'cookie|b=s',
            'cookie-jar|c=s',
@@ -84,6 +84,7 @@ GetOptions(\%args,
            'include-request',
            'json-pp',
            'json-pp-indent=i',
+           'json-stringify-null',
            'junk-session-cookies',
            'location|L',
            'man',
@@ -1033,9 +1034,12 @@ sub parse_process_action {
             $action = { action => 'print', args => { what => 'json', value => $param } };
         } elsif ($type eq 'xml'){
             $action = { action => 'print', args => { what => 'xml', value => $param } };
+        } else {
+            say STDERR "Unknown action $type";
+            exit 10;
         }
     } # else {} parse json
-    say STDERR "Procession action:" . Dumper $action if $args{debug};
+    say STDERR "Processed action:" . Dumper $action if $args{debug};
     return $action;
 }
 
@@ -1050,8 +1054,8 @@ sub perform_action {
             if ($hash){
                 # say Dumper $js;
                 my $jp = $action->{args}{value};
-                my $jval = get_jpath($hash, $jp);
-                say STDOUT $jval;
+                my $jval = get_jpath($hash, $jp) // '<null>'; # if undef value, stringify to avoid message
+                say STDOUT $jval; 
             } else {
                 say STDERR "Request did not returned a valid JSON for an action.";
                 exit 8;
@@ -1130,7 +1134,7 @@ sub from_json {
          |
          false (?{ push_val(0); json_trace '->false' })
          |
-         null  (?{ push_val(undef); json_trace '->null' })
+         null  (?{ push_val($args{'json-stringify-null'}?'null':undef); json_trace '->null' })
          |
          (?&ARRAY)
          |
