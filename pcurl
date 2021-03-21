@@ -2457,9 +2457,10 @@ Send an additional header, or change / discard a default one. Usual syntax is -H
 
 Display a short help.
 
-=item --http09, --http10, --http11
+=item --http09, --http10 | 0, --http11
 
 Specify the version of HTTP we want to use. In HTTP/0.9 the only method is GET <url> (without version) and the answer does not return headers, only the body of returned resource. In HTTP/1.0 we can use Host:, Connection: and additional headers. IN HTTP/1.1 the Host: is mandatory and if you do not specify Connection: it is kept open by default. We send automatically a Connection: close by default.
+Default is HTTP/1.1
 
 =item -i, --include, --include-response
 
