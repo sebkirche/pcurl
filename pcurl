@@ -229,7 +229,7 @@ if ($url->{scheme} =~ /^http/){
     } elsif ($args{http11}){
         $http_vers = '1.1';
     } else {
-        $http_vers = '1.0'; # default HTTP version when not specified
+        $http_vers = '1.1'; # default HTTP version when not specified
     }
 
     if ($args{request}){

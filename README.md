@@ -98,6 +98,7 @@ Options
         Host:, Connection: and additional headers. IN HTTP/1.1 the Host: is
         mandatory and if you do not specify Connection: it is kept open by
         default. We send automatically a Connection: close by default.
+        Default is HTTP/1.1
 
     -i, --include, --include-response
         Include the response headers in the output.
