@@ -91,7 +91,7 @@ Options
     -h, --help
         Display a short help.
 
-    --http09, --http10, --http11
+    --http09, --http10 | -0, --http11
         Specify the version of HTTP we want to use. In HTTP/0.9 the only
         method is GET <url> (without version) and the answer does not return
         headers, only the body of returned resource. In HTTP/1.0 we can use
