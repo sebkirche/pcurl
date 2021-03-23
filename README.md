@@ -171,6 +171,9 @@ Options
         POST, PUT, TRACE, OPTIONS and DELETE, but you can specify a custom
         method. If not specified, we send a GET.
 
+    -s, --silent
+        Silent mode - argument compatibility w/ curl, pcurl is silent by default
+
     --stompmsg <message>
         Content of the message for the STOMP message broker. Use with a
         stomp://server:port/queuename url.

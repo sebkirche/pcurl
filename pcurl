@@ -101,6 +101,7 @@ GetOptions(\%args,
            'remote-time|R',
            'referer|e=s',
            'request|X=s',
+           'silent|s',
            # 'stompdest=s',
            'stompmsg=s',
            'tcp-nodelay!',      # negatable: --notcp-nodelay
@@ -2541,6 +2542,10 @@ Set the remote file's time on the local output, if provided by Last-Modified res
 =item -X, --request <method>
 
 Specify the method for the request. Common methods are GET, HEAD, POST, PUT, TRACE, OPTIONS and DELETE, but you can specify a custom method. If not specified, we send a GET. 
+
+=item -s, --silent
+
+Silent mode
 
 =item --stompmsg <message>
 
