@@ -787,27 +787,35 @@ sub process_http_response {
                 say STDERR "* Ignoring the response-body" if ($is_redirected && $args{location}) && (! $fh->eof ) && ($args{verbose} || $args{debug});
                 binmode(STDOUT, ":raw"); # pass in raw layer to prevent utf8 or cr/lf conversion in binary files
 
+                $content_length = $headers{'content-length'};
+                if ($content_length){                                         
+                    say STDERR "* need to read $content_length bytes in response" if $args{debug};
+                } else {
+                    say STDERR "* Unknown size of response to read" if $args{debug};
+                }
+                say STDERR "* Reading using chunked mode" if $chunked_mode && $args{debug};
                 my $chunk_len;
-                unless ($fh->eof){ # loop on the remaining of response
-                    $content_length = $headers{'content-length'};
-                    if ($content_length){
-                        say STDERR "* need to read $content_length bytes in response" if $args{debug};
-                    } else {
-                        say STDERR "* Unknown size of response to read" if $args{debug};
-                    }
-                    say STDERR "* Reading using chunked mode" if $chunked_mode && $args{debug};
+              CHUNK:
+                while (! $fh->eof){ # loop on the remaining of response
                     if ($chunked_mode){
                         my $line = <$fh>;
+                        last CHUNK unless defined $line;
+                        # say STDERR sprintf("%*vX", ' ', $line); # vector dump = simple hex dump
                         $line =~ s/[\r\n]+$//;
-                        $chunk_len = hex($line);
-                        say STDERR sprintf("* reading a block of %d (0x%x) bytes", $chunk_len, $chunk_len) if $args{debug}; 
+                        $chunk_len = hex($line); # block size is in hex ascii
+                        say STDERR sprintf("* Next block is %d (0x%x) bytes long", $chunk_len, $chunk_len) if $args{debug}; 
                     }
                     my $buf_size = $chunked_mode ? $chunk_len : (2 * 1024 * 1024);
-                    my $block = $fh->read(my $buf, $buf_size);
-                    if ($block){
-                        say STDERR "* Read $block bytes" if $args{debug};
-                        $received += $block;
-                        print STDOUT $buf unless ($is_redirected && $args{location});
+                    if ($buf_size){
+                        my $block = $fh->read(my $buf, $buf_size);
+                        if ($block){
+                            say STDERR "* Read $block bytes" if $args{debug};
+                            $received += $block;
+                            print STDOUT $buf unless ($is_redirected && $args{location});
+                        }
+                    }
+                    if ($chunked_mode){
+                        my $line = <$fh>; # the block is followed by a CR LF
                     }
                 }
                 # there may have additional info... (body > Content-Length)
