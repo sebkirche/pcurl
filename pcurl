@@ -23,7 +23,7 @@ use Socket qw(IPPROTO_TCP TCP_NODELAY);
 use Time::Local;
 # use Carp::Always;
 
-our $VERSION = '0.8.0';
+our $VERSION = '0.9.0';
 $|++; # auto flush messages
 
 $Data::Dumper::Sortkeys = 1;
@@ -685,6 +685,7 @@ sub process_http_response {
     my $headers_done = 0;       # flag to know if we are processing headers or body
     my $status_done = 0;        # flag to know if we have processed the status
     my $received = 0;           # counter for total bytes received
+    my $chunked_mode = 0;       # flag set when chunked mode
     my $content_length = 0;     # size of response, according to the response header
     my %headers;                # a map for all received headers
     my %resp;                   # response meta-data
@@ -760,6 +761,8 @@ sub process_http_response {
                                   say STDERR "Adding cookie ".$hcook->{name} if $args{debug};
                                   push @$cookies, $hcook;
                               }
+                          } elsif ($hname eq 'transfer-encoding' && lc $hvalue eq 'chunked'){
+                              $chunked_mode++;
                           }
 
                           if (exists $headers{$hname}){
@@ -783,14 +786,23 @@ sub process_http_response {
                 my $is_redirected = $resp{status} && $resp{status}{code} && $resp{status}{code} =~ /^3/;
                 say STDERR "* Ignoring the response-body" if ($is_redirected && $args{location}) && (! $fh->eof ) && ($args{verbose} || $args{debug});
                 binmode(STDOUT, ":raw"); # pass in raw layer to prevent utf8 or cr/lf conversion in binary files
+
+                my $chunk_len;
                 unless ($fh->eof){ # loop on the remaining of response
                     $content_length = $headers{'content-length'};
                     if ($content_length){
-                        say STDERR "* need to read $content_length bytes in response..." if $args{debug};
+                        say STDERR "* need to read $content_length bytes in response" if $args{debug};
                     } else {
-                        say STDERR "* Unknown size of response to read..." if $args{debug};
+                        say STDERR "* Unknown size of response to read" if $args{debug};
                     }
-                    my $buf_size = 2 * 1024 * 1024;
+                    say STDERR "* Reading using chunked mode" if $chunked_mode && $args{debug};
+                    if ($chunked_mode){
+                        my $line = <$fh>;
+                        $line =~ s/[\r\n]+$//;
+                        $chunk_len = hex($line);
+                        say STDERR sprintf("* reading a block of %d (0x%x) bytes", $chunk_len, $chunk_len) if $args{debug}; 
+                    }
+                    my $buf_size = $chunked_mode ? $chunk_len : (2 * 1024 * 1024);
                     my $block = $fh->read(my $buf, $buf_size);
                     if ($block){
                         say STDERR "* Read $block bytes" if $args{debug};
