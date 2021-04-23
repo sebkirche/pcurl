@@ -77,9 +77,9 @@ GetOptions(\%args,
            'header|H=s@',
            'head|I',
            'help|h|?',
-           'http09',
-           'http10|0',
-           'http11',
+           'http09|http0.9',
+           'http10|0|http1.0',
+           'http11|http1.1',
            'include-response|include|i',
            'include-request',
            'json-pp',
@@ -1470,14 +1470,14 @@ sub process_stomp_response {
 sub parse_url {
     my $given = shift;
     unless( $given =~ qr{
-        (?: (?<SCHEME> [\w]+ ) : )?
+        (?: (?<SCHEME> [A-Za-z0-9+.-]+ ) : )?
         (?: 
           (?: // )?
           (?: (?<AUTH> (?<USER> (?&UNRESERVED)+) (?: : (?<PWD>[^@]+) )? ) @ )?
           (?<HOST> [^-/] (?&UNRESERVED)+ )
           (?: : (?<PORT> \d+ ))?
         )?
-        (?<PATH> (?&PCHAR)+ )?
+        (?<PATH> / (?&PCHAR)* ( / (?&PCHAR)* )* )?
         (?: \? (?<PARAMS> (?&PCHAR)* ))?
       
         (?(DEFINE) #from here, define some sub-parts
@@ -1485,7 +1485,9 @@ sub parse_url {
           (?<PCTENCODED> % (?&HEXDIG) (?&HEXDIG) )
           (?<HEXDIG> [0-9A-Za-z] )
           (?<UNRESERVED> [A-Za-z0-9._~-] )
-          (?<SUBDEL> [/!\$'&()\*\+,\.=] )
+          #(?<RESERVED> (?&GENDEL) | (?&SUBDEL) ) # reserved
+          #(?<GENDEL> [:/?\#\[\]@] )
+          (?<SUBDEL> [!\$&'()\*\+,;=\.] )
         )
             }x ){
         return undef;
@@ -1500,7 +1502,7 @@ sub parse_url {
         };
     }
     $url->{host} = $+{HOST};
-    $url->{port} = $args{port} || $+{PORT};
+    $url->{port} = $args{port} || $+{PORT}; # if port given in parameter, override url port
     unless ($url->{port}){
         if ($url->{scheme} eq 'http'){
             $url->{port} = 80;
