@@ -1333,6 +1333,7 @@ sub get_jpath {
     my ($ref, $path, $fullpath) = @_;
     unless (ref $path eq 'ARRAY'){
         $fullpath = $path;              # keep a copy of initial path for reference in errors
+        $path = substr($path, 1) if index($path, '/') == 0; # remove initial slash - supports /absolute/path
         $path = [ split /\//, $path ] ; # for first call path is not an array ref
     }
     print STDERR "Path: " . join(' / ', @$path) . "\n" if $args{debug};
