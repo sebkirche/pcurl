@@ -1471,9 +1471,8 @@ sub process_stomp_response {
 sub parse_url {
     my $given = shift;
     unless( $given =~ qr{
-        (?: (?<SCHEME> [A-Za-z0-9+.-]+ ) : )?
+        (?: (?<SCHEME> [A-Za-z0-9+.-]+ ) :// )?
         (?: 
-          (?: // )?
           (?: (?<AUTH> (?<USER> (?&UNRESERVED)+) (?: : (?<PWD>[^@]+) )? ) @ )?
           (?<HOST> [^-/] (?&UNRESERVED)+ )
           (?: : (?<PORT> \d+ ))?
