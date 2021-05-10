@@ -91,7 +91,7 @@ Options
     -h, --help
         Display a short help.
 
-    --http09, --http10 | -0, --http11
+    --http09 | --http0.9, --http10 | --http1.0 | -0, --http11 | --http1.1
         Specify the version of HTTP we want to use. In HTTP/0.9 the only
         method is GET <url> (without version) and the answer does not return
         headers, only the body of returned resource. In HTTP/1.0 we can use
@@ -99,6 +99,9 @@ Options
         mandatory and if you do not specify Connection: it is kept open by
         default. We send automatically a Connection: close by default.
         Default is HTTP/1.1
+
+        Note that pcurl supports curl parameters --http0.9, --http1.0 and
+        http1.1 if only you have Getopt::Long >= 2.39
 
     -i, --include, --include-response
         Include the response headers in the output.
