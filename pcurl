@@ -1631,6 +1631,7 @@ sub connect_ssl_tunnel {
 
 # poor man's hex dumper :)
 sub hexdump {
+    use bytes;                  # ensure to work on bytes
     my $data = shift;
     my $data_len = shift || 16;
     my $ascii_only = shift || 0;
@@ -1639,7 +1640,7 @@ sub hexdump {
     my @out;
     for my $s (unpack("(a${data_len})*", $data)){
         last unless $s;
-        my $h = join' ', unpack('(H2)*', $s);
+        my $h = join ' ', unpack('(H2)*', $s);
         $s =~ s/[\x00-\x1f]/./g;
         $s =~ s/[\x80-\xff]/./g if $ascii_only;        
         push @out, sprintf("%06x  %-${hex_len}s %s", $addr, $h, $s);
