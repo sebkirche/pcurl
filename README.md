@@ -109,6 +109,9 @@ Options
     --include-request
         Include the request headers in the output.
 
+    -k, --insecure
+        Accept insecure https connections (mostly curl option compatibility)
+
     --json-pp
         When using a json action (see --action), pretty-print the json.
 

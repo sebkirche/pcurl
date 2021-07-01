@@ -79,6 +79,7 @@ my @getopt_defs = (
     'help|h|?',
     'include-response|include|i',
     'include-request',
+    'insecure|k',
     'json-pp',
     'json-pp-indent=i',
     'json-stringify-null',
@@ -1618,6 +1619,7 @@ sub connect_ssl_tunnel {
         $pport = $proxy->{port};
     }
     my $cmd = "openssl s_client -connect ${host}:${port} -servername ${host} -quiet";# -quiet -verify_quiet -partial_chain';
+    $cmd .= ' -no_check_time' if $args{insecure}; # useless?
     $cmd .= " -proxy ${phost}:${pport}" if $phost;
     $tunnel_pid = open3(*CMD_IN, *CMD_OUT, *CMD_ERR, $cmd);
     say STDERR "* connected via OpenSSL to $host:$port" if $args{verbose} || $args{debug};
@@ -2510,6 +2512,10 @@ Include the response headers in the output.
 =item --include-request
 
 Include the request headers in the output.
+
+=item -k, --insecure
+
+Accept insecure https connections (mostly curl option compatibility)
 
 =item --json-pp
 
