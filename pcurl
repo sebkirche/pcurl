@@ -245,16 +245,6 @@ sub process_loop {
                 exit 1;
             }
         }
-
-        # try to get the output file name from url
-        if ($args{'remote-name'} && !$args{'remote-header-name'}){
-            if ($url->{url} =~ m{\/([^/]+)$}){
-                $args{output} = $1;
-            } else {
-                say STDERR "Cannot get remote file name from url.";
-                exit 7;
-            }
-        }
         
         if ($url->{scheme} =~ /^http/){
             # HTTP or HTTPS
@@ -333,7 +323,7 @@ sub redirect_output {
 # close out file and restore STDOUT
 sub restore_output {
     my $out_name = $args{output};
-    if ($is_out_redirected && $out_name && $out_name ne '-'){
+    if ($is_out_redirected){
         close STDOUT;
         open (STDOUT, '>&', $STDOLD);
         $is_out_redirected = 0;
@@ -382,7 +372,7 @@ sub process_http {
         send_http_request($IN, $OUT, $ERR, $headers, $body);
         
         # for some actions we need to capure the output
-        my $need_capture = defined $process_action; # && $process_action->{action} eq 'grep';
+        my $need_capture = defined $process_action && !$process_action->{done}; # && $process_action->{action} eq 'grep';
 
         # Receive the response
         $resp = process_http_response($IN, $ERR, $url_final, $url_proxy, $need_capture);
@@ -390,6 +380,7 @@ sub process_http {
         say STDERR "* received $resp->{byte_len} bytes" if $args{verbose} || $args{debug};
         if ($resp->{byte_len}){
             my $code = $resp->{status}{code};
+            say STDERR '* ' . $url_final->{url} . ' -> ' . $code if $args{verbose} || $args{debug};
             if ($args{location} && (300 <= $code) && ($code <= 399)){
                 # if the result is a redirect, follow it
                 unless($redirs){
@@ -408,11 +399,15 @@ sub process_http {
                 }
                 say STDERR sprintf("* Redirecting #%d to %s", $max_redirs - $redirs,  $url_final->{url}) if $args{verbose} || $args{debug};
                 $redirs--;
+            } elsif ($code == 404){
+                say STDERR "* 404 on $url_final->{url}";
+                goto BREAK;
             } else {
                 # result other than redirect
 
-                if ($process_action){
-                    perform_action($process_action, $resp);
+                if ($process_action && !$process_action->{done}){
+                    perform_action($process_action, $url_final, $resp);
+                    $process_action->{done} = 1;
                 }
                 
                 goto BREAK;         # weird, 'last' is throwing a warning "Exiting subroutine via last"
@@ -456,7 +451,7 @@ sub process_file {
         $content = <$fh>;
         close $fh;
         $resp->{captured} = \$content;
-        perform_action($process_action, $resp);
+        perform_action($process_action, $url, $resp);
     } else {
         binmode $fh;
         my $buf = '';
@@ -828,7 +823,7 @@ sub process_http_response {
 
                 # avoid unwanted binary output
                 $content_length = $headers{'content-length'};
-                if ($headers{'content-type'} =~ /charset=binary/){
+                if ($headers{'content-type'} && $headers{'content-type'} =~ /charset=binary/){
                     if (!$args{output}
                         && (!$args{'remote-name'} && !$args{'remote-header-name'})
                         && -t STDOUT){
@@ -840,15 +835,37 @@ NO_BIN
                         exit 10;
                     }
                 }
-                
-                if ($args{output} || ($args{'remote-name'} && $args{'remote-header-name'} && $headers{'content-disposition'} =~ /attachment; filename="([^"]+)"/)){
-                    my $remote_header_name = $1;
-                    if (!$args{output} && $remote_header_name && -w $remote_header_name){
-                        prefix_print(\*STDERR, 'Warning: ', "Refusing to overwrite ${remote_header_name}: File exists");
-                        exit 10;
+
+                # try to get the output file name from url, or header
+                my $fname = '';
+                if ($args{'remote-name'}){
+                    if ($args{'remote-header-name'}
+                        && ($headers{'content-disposition'}
+                            && $headers{'content-disposition'} =~ /attachment; filename="([^"]+)"/)
+                        ){
+                        my $remote_header_name = $1;
+                        if (!$args{output} && $remote_header_name && -w $remote_header_name){
+                            prefix_print(\*STDERR, 'Warning: ', "Refusing to overwrite ${remote_header_name}: File exists");
+                            exit 10;
+                        } else {
+                            $fname = $remote_header_name;
+                        }
+                    } else {
+                        if ($url_final->{url} =~ m{\/([^/]+)$}){
+                            $fname = $1;
+                        } else {
+                            unless ($process_action && $process_action->{what} eq 'getlinked'){
+                                say STDERR "Cannot get remote file name from url.";
+                                exit 7;
+                            }
+                        }
                     }
-                    redirect_output( $args{output} || $1);
-                }   
+                } elsif ($args{output}){
+                    $fname = $args{output};
+                }
+                if ($fname){
+                    redirect_output($fname);
+                }
                 
                 # we show body contents only when not following redirects
                 my $is_redirected = $resp{status} && $resp{status}{code} && $resp{status}{code} =~ /^3/;
@@ -1116,13 +1133,17 @@ sub parse_process_action {
         my $type = $1;
         my $param = $2 || '';
         if ($type eq 'header'){
-            $action = { action => 'print', args => { what => 'header', value => $param } };
+            $action = { what => 'header', value => $param };
         } elsif ($type eq 'bodyrx'){
-            $action = { action => 'grep', args => { what => 'body', value => $param } };
+            $action = { what => 'bodyrx', value => $param };
+        } elsif ($type eq 'listlinks'){
+            $action = { what => 'listlinks', value => $param };
+        } elsif ($type eq 'getlinked'){
+            $action = { what => 'getlinked', value => $param };
         } elsif ($type eq 'json'){
-            $action = { action => 'print', args => { what => 'json', value => $param } };
+            $action = { what => 'json', value => $param };
         } elsif ($type eq 'xml'){
-            $action = { action => 'print', args => { what => 'xml', value => $param } };
+            $action = { what => 'xml', value => $param };
         } else {
             say STDERR "Unknown action $type";
             exit 10;
@@ -1134,41 +1155,86 @@ sub parse_process_action {
 
 # Do something with the retrieved resource
 sub perform_action {
-    my ($action, $resp) = @_;
-    if (lc $action->{action} eq 'print'){
-        if ($action->{args}{what} eq 'header'){
-            say STDOUT $resp->{headers}{lc $action->{args}{value}};
-        } elsif ($action->{args}{what} eq 'json'){
-            my $hash = from_json(${$resp->{captured}});
-            if ($hash){
-                # say Dumper $js;
-                my $jp = $action->{args}{value};
-                my $jval = get_jpath($hash, $jp) // '<null>'; # if undef value, stringify to avoid message
-                say STDOUT $jval; 
-            } else {
-                say STDERR "Request did not returned a valid JSON for an action.";
-                exit 8;
-            }
-        } elsif ($action->{args}{what} eq 'xml'){
-            my $treepp = XML::TreePP->new();
-            my $hash = $treepp->parse($resp->{captured});
-            if ($hash){
-                # say Dumper $js;
-                my $jp = $action->{args}{value};
-                my $jval = get_jpath($hash, $jp);
-                say STDOUT $jval;
-            } else {
-                say STDERR "Request did not returned a valid XML for an action.";
-                exit 9;
-            }
+    my ($action, $url, $resp) = @_;
+
+    if ($action->{what} eq 'header'){
+        say STDOUT $resp->{headers}{lc $action->{value}};
+    } elsif ($action->{what} eq 'json'){
+        my $hash = from_json(${$resp->{captured}});
+        if ($hash){
+            # say Dumper $js;
+            my $jp = $action->{value};
+            my $jval = get_jpath($hash, $jp) // '<null>'; # if undef value, stringify to avoid message
+            say STDOUT $jval; 
+        } else {
+            say STDERR "Request did not returned a valid JSON for an action.";
+            exit 8;
         }
-    } elsif (lc $action->{action} eq 'grep'){
-        if ($action->{args}{what} eq 'body'){
-            if (${$resp->{captured}} =~ /$action->{args}{value}/){
-                say STDOUT $&;
+    } elsif ($action->{what} eq 'xml'){
+        my $treepp = XML::TreePP->new();
+        my $hash = $treepp->parse($resp->{captured});
+        if ($hash){
+            # say Dumper $js;
+            my $jp = $action->{value};
+            my $jval = get_jpath($hash, $jp);
+            say STDOUT $jval;
+        } else {
+            say STDERR "Request did not returned a valid XML for an action.";
+            exit 9;
+        }
+    } elsif ($action->{what} eq 'bodyrx'){
+        if (${$resp->{captured}} =~ /$action->{value}/){
+            say STDOUT $&;
+        }
+    } elsif ($action->{what} eq 'listlinks'){
+        my @links = ${$resp->{captured}} =~ /<a.*href="([^"]+)"/g;
+        if ($action->{value}){
+            say STDOUT $_ for grep { m|$action->{value}| } @links;
+        } else {
+            say STDOUT $_ for @links;
+        }
+    } elsif ($action->{what} eq 'getlinked' && !$action->{done}){
+        my @links = ${$resp->{captured}} =~ /<a.*href="([^"]+)"/g;
+        my @reqs;
+        if ($action->{value}){
+            say STDERR "grepping on $action->{value}" if $args{debug};
+            @reqs = grep { /$action->{value}/ } @links;
+        } else {
+            @reqs = @links;
+        }
+        # say for @reqs;
+        for my $r (@reqs){
+            if ($r =~ /^http/){
+                # arbitrary url
+                push @request_list, $r;
+            } else {
+                my $p;
+                if ($r =~ m{^/}){
+                    # absolute url
+                    $p = $r;
+                } else {
+                    # relative url
+                    $p = $url->{path} . $r;
+                }
+                my $auth = '';
+                if ($url->{'auth:user'}){
+                    $auth = $url->{'auth:user'};
+                    if ($url->{'auth:password'}){
+                        $auth .= ':' . $url->{'auth:password'};
+                    }
+                    $auth .= '@';
+                }
+                my $u = sprintf("%s://%s%s:%d%s",
+                                $url->{scheme},
+                                $auth,
+                                $url->{host},
+                                $url->{port},
+                                $p);
+                push @request_list, $u;
             }
         }
     }
+
 }
 
 sub TRACE_JSON {

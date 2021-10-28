@@ -27,7 +27,7 @@ Perl limited dependencies are:
 * Time::Local
 * locally available openSSL
 
-When possible, pCurl supports cURL command line arguments.
+pCurl tries to supports (a small subset of) cURL command line arguments.
 
 Usage
 -----
@@ -208,15 +208,20 @@ Actions
 To simplify some post-processing on the retrieved resources, you can specify an action to be performed on the result.
 Action can be of type:
 
-* print: display a response header value, or a json response attribute
+* print: display a response header value, a json or xml response attribute
     * `pcurl --action=header:server http://free.fr` => `nginx`
     * `pcurl https://jsonplaceholder.typicode.com/users/1 --action='json:id'` => `1`
     * `pcurl http://jsonplaceholder.typicode.com/users --action='json:[3]/address/geo'` => `{"lng":-164.299,"lat":29.4572}`
     * `pcurl http://jsonplaceholder.typicode.com/users --action='json:[3]/address/geo/lat'` => `29.4572`
-    * `pcurl https://www.w3schools.com/xml/simple.xml --action 'xml:breakfast_menu/food/length()' => 5`
+    * `pcurl https://www.w3schools.com/xml/simple.xml --action 'xml:breakfast_menu/food/length()' => `5`
     * note: `foo/[42]` is equivalent to `foo[42]`
 
 * regex: display the match of a regex on the response body
+    * `pcurl http://jsonplaceholder.typicode.com/ --action='bodyrx:Free.*\.'` => `Free fake API for testing and prototyping.`
+
+* spider: show some useful infos when grabbing page contents
+    * `pcurl http://some.host.com/some/path/ --action 'listlinks:\.pdf$'
+    * `pcurl http://some.host.com/some/path/ --action 'getlinked:^[^?].*[^/]$'` => get all linked files but directories and sort links
 
 Return codes
 ------------
