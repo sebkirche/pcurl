@@ -1,10 +1,10 @@
 #!/usr/bin/env perl
 
 # pCurl - a cURL-like implemented in Perl
-#         with custom features like STOMP message sending
-#         or response processing
+#         with built-in json and xml parsers
+#         and custom features like STOMP message sending
 #
-# (c) 2019, 2020 - Sébastien Kirche
+# (c) 2019, 2020, 2021 - Sébastien Kirche
 
 use warnings;
 use strict;
@@ -24,7 +24,7 @@ use Socket qw(IPPROTO_TCP TCP_NODELAY);
 use Time::Local;
 # use Carp::Always;
 
-our $VERSION = '0.9.0';
+our $VERSION = '0.9.1';
 $|++; # auto flush messages
 
 $Data::Dumper::Sortkeys = 1;
@@ -225,7 +225,7 @@ if ($args{'parse-only'}){
 # if we want to output in a file, redirect the initial STDOUT
 my $STDOLD;
 if ($args{'remote-name'}){
-    if ($url->{path} =~ m{\/([^/]+)$}){
+    if ($url->{url} =~ m{\/([^/]+)$}){
         $args{output} = $1;
     } else {
         say STDERR "Cannot get remote file name from url.";
