@@ -58,7 +58,10 @@ my $def_max_wait = 10;          # default value for response timeout
 my %defports = ( http  => 80,
                  https => 443 );
 
-my ($url, $cli_url, $uagent, $http_vers, $tunnel_pid, $auto_ref, $use_cookies, $cookies, $process_action);
+# when writing output in a file, holder of the initial STDOUT
+my $STDOLD;
+my $is_out_redirected = 0;
+my ($uagent, $http_vers, $tunnel_pid, $auto_ref, $use_cookies, $cookies, $process_action);
 
 my @getopt_defs = (
     'accept=s',
@@ -95,6 +98,7 @@ my @getopt_defs = (
     'proxy-user|U=s',
     'proxy10=s',
     'proxy|x=s',
+    'remote-header-name|J',
     'remote-name|O',
     'remote-time|R',
     'referer|e=s',
@@ -197,91 +201,15 @@ if ($args{action}){
     $process_action = parse_process_action($args{action});
 }
 
-$cli_url = $args{url} || $ARGV[0];
+my $cli_url = $args{url} || $ARGV[0];
 unless ($cli_url){
     say STDERR "No url provided...";
     pod2usage(-exitval => 1);
 }
-unless ($url = parse_url($cli_url)){
-    say STDERR "It's strange to me that `$cli_url` does not look like an url...";
-    exit 1;
-}
-if ($args{'parse-only'}){
-    if ($url){
-        for my $k (sort grep { $url->{$_} } keys %$url){
-            if (ref $url->{$k} eq 'HASH'){
-                my $h = $url->{$k};
-                say(STDOUT "$k:$_ = $h->{$_}") for sort keys %$h;
-            } else {
-                say STDOUT "$k = $url->{$k}";
-            }
-        }
-        exit 0;
-    } else {
-        exit 1;
-    }
-}
 
-# if we want to output in a file, redirect the initial STDOUT
-my $STDOLD;
-if ($args{'remote-name'}){
-    if ($url->{url} =~ m{\/([^/]+)$}){
-        $args{output} = $1;
-    } else {
-        say STDERR "Cannot get remote file name from url.";
-        exit 7;
-    }
-}
-
-if ($url->{scheme} =~ /^http/){
-    # HTTP or HTTPS
-
-    # version
-    if ($args{http09}){
-        $http_vers = '0.9';
-    } elsif ($args{http10}){
-        $http_vers = '1.0';
-    } elsif ($args{http11}){
-        $http_vers = '1.1';
-    } else {
-        $http_vers = '1.1'; # default HTTP version when not specified
-    }
-
-    if ($args{request}){
-        if ($args{request} =~ /^(GET|HEAD|POST|PUT|TRACE|OPTIONS|DELETE)$/i){
-            $args{request} = uc $args{request};
-            if ($args{request} ne 'GET' and HTTP09()){
-                say STDERR "HTTP/0.9 only supports GET method.\n" ;
-                exit 2;
-            }
-        } else {
-            # Nothing, one can have a custom HTTP method
-        }
-    }
-
-    my $method;
-    if ($args{data} || @{$args{'data-urlencode'}} || $args{'data-binary'} || $args{'data-raw'}){
-        $method = $args{request} || 'POST';
-    } else {
-        $method = $args{head} ? 'HEAD' : $args{request} || 'GET';
-    }
-    #$url->{path} = '*' if $method eq 'OPTIONS';    
-    process_http($method, $url);
-} elsif ($url->{scheme} =~ /^stomp/){
-    unless ($url->{path} && $args{stompmsg}){
-        say STDERR "Message sending with --stompmsg <message> is supported for now.";
-        exit 3;
-    }
-    process_stomp($url);
-} elsif ($url->{scheme} eq 'file'){
-    unless ( ! defined $url->{host}
-             || lc($url->{host}) eq 'localhost'
-             || $url->{host} eq '127.0.0.1'){
-        say STDERR "* Invalid file://hostname/, expected localhost or 127.0.0.1 or none";
-        exit 4;
-    }
-    process_file($url);
-}
+my @request_list;
+push @request_list, $cli_url;
+process_loop();
 
 # save the cookie jar if requested
 if ($args{'cookie-jar'}){
@@ -291,21 +219,124 @@ if ($args{'cookie-jar'}){
 
 # ------- End of main prog ---------------------------------------------------------------
 
+sub process_loop {
+
+    while (@request_list){
+
+        my $u = shift @request_list;
+        my $url = parse_url($u);
+        
+        unless ($url){
+            say STDERR "It's strange to me that `$u` does not look like an url...";
+            exit 1;
+        }
+        if ($args{'parse-only'}){
+            if ($url){
+                for my $k (sort grep { $url->{$_} } keys %$url){
+                    if (ref $url->{$k} eq 'HASH'){
+                        my $h = $url->{$k};
+                        say(STDOUT "$k:$_ = $h->{$_}") for sort keys %$h;
+                    } else {
+                        say STDOUT "$k = $url->{$k}";
+                    }
+                }
+                exit 0;
+            } else {
+                exit 1;
+            }
+        }
+
+        # try to get the output file name from url
+        if ($args{'remote-name'} && !$args{'remote-header-name'}){
+            if ($url->{url} =~ m{\/([^/]+)$}){
+                $args{output} = $1;
+            } else {
+                say STDERR "Cannot get remote file name from url.";
+                exit 7;
+            }
+        }
+        
+        if ($url->{scheme} =~ /^http/){
+            # HTTP or HTTPS
+            
+            # version
+            if ($args{http09}){
+                $http_vers = '0.9';
+            } elsif ($args{http10}){
+                $http_vers = '1.0';
+            } elsif ($args{http11}){
+                $http_vers = '1.1';
+            } else {
+                $http_vers = '1.1'; # default HTTP version when not specified
+            }
+            
+            if ($args{request}){
+                if ($args{request} =~ /^(GET|HEAD|POST|PUT|TRACE|OPTIONS|DELETE)$/i){
+                    $args{request} = uc $args{request};
+                    if ($args{request} ne 'GET' and HTTP09()){
+                        say STDERR "HTTP/0.9 only supports GET method.\n" ;
+                        exit 2;
+                    }
+                } else {
+                    # Nothing, one can have a custom HTTP method
+                }
+            }
+            
+            my $method;
+            if ($args{data} || @{$args{'data-urlencode'}} || $args{'data-binary'} || $args{'data-raw'}){
+                $method = $args{request} || 'POST';
+            } else {
+                $method = $args{head} ? 'HEAD' : $args{request} || 'GET';
+            }
+            #$url->{path} = '*' if $method eq 'OPTIONS';    
+            process_http($method, $url);
+        } elsif ($url->{scheme} =~ /^stomp/){
+            unless ($url->{path} && $args{stompmsg}){
+                say STDERR "Message sending with --stompmsg <message> is supported for now.";
+                exit 3;
+            }
+            process_stomp($url);
+        } elsif ($url->{scheme} eq 'file'){
+            unless ( ! defined $url->{host}
+                     || lc($url->{host}) eq 'localhost'
+                     || $url->{host} eq '127.0.0.1'){
+                say STDERR "* Invalid file://hostname/, expected localhost or 127.0.0.1 or none";
+                exit 4;
+            }
+            process_file($url);
+        }
+
+    }
+}
+
+sub prefix_print {
+    my ($fd, $prefix, $text) = @_;
+    foreach my $line (split /\n/, $text){
+        print $fd $prefix . $line . "\n";
+    }
+}
+
+# redirect STDOUT to a file
+# unless the out name is '-' to allow binary output to STDOUT
 sub redirect_output {
-    if ($args{output}){
+    my $out_name = shift;
+    if (!$is_out_redirected && $out_name && $out_name ne '-'){
         open $STDOLD, '>&', STDOUT;
-        open STDOUT, '>', $args{output} or die "Cannot open $args{output} for output.";
+        open STDOUT, '>', $out_name or die "Cannot open $out_name for output.";
         # binmode(STDOUT, ":raw");
         # later, to restore STDOUT:
         # open (STDOUT, '>&', $STDOLD);
+        $is_out_redirected = 1;
     }
 }
 
 # close out file and restore STDOUT
 sub restore_output {
-    if ($args{output}){
+    my $out_name = $args{output};
+    if ($is_out_redirected && $out_name && $out_name ne '-'){
         close STDOUT;
         open (STDOUT, '>&', $STDOLD);
+        $is_out_redirected = 0;
     }
 }
 
@@ -314,8 +345,6 @@ sub process_http {
     my $url_final = shift;
 
     my ($IN, $OUT, $ERR, $host, $port, $resp);
-
-    redirect_output();
 
     $max_redirs = $args{'max-redirs'} if defined $args{'max-redirs'};
     my $redirs = $max_redirs;   # redirs is a countdown of remaining allowed redirections
@@ -419,7 +448,7 @@ sub process_file {
     say STDERR "* size of $path is $size" if $args{debug};
     $resp->{byte_len} = $size;
 
-    redirect_output();
+    redirect_output($args{output});
 
     open (my $fh, '<', $path) or die "Couldn't open file $path: $!";
     if (defined $process_action){
@@ -504,7 +533,7 @@ sub get_proxy_settings {
     
     $proxy = parse_url($proxy_set);
     unless ($proxy){
-        say STDERR "It's strange to me that `$url` does not look as an url for proxy...";
+        say STDERR "It's strange to me that `$proxy_set` does not look as an url for proxy...";
         exit 4;
     }
     say STDERR "* Using proxy $proxy->{url}" if $args{verbose} || $args{debug};
@@ -796,12 +825,37 @@ sub process_http_response {
                       }                            
                   }
                 } # end of headers processing
+
+                # avoid unwanted binary output
+                $content_length = $headers{'content-length'};
+                if ($headers{'content-type'} =~ /charset=binary/){
+                    if (!$args{output}
+                        && (!$args{'remote-name'} && !$args{'remote-header-name'})
+                        && -t STDOUT){
+                        prefix_print(\*STDERR, 'Warning: ', <<"NO_BIN");
+Binary output can mess up your terminal. Use "--output -" to tell 
+curl to output it to your terminal anyway, or consider "--output 
+<FILE>" to save to a file.
+NO_BIN
+                        exit 10;
+                    }
+                }
+                
+                if ($args{output} || ($args{'remote-name'} && $args{'remote-header-name'} && $headers{'content-disposition'} =~ /attachment; filename="([^"]+)"/)){
+                    my $remote_header_name = $1;
+                    if (!$args{output} && $remote_header_name && -w $remote_header_name){
+                        prefix_print(\*STDERR, 'Warning: ', "Refusing to overwrite ${remote_header_name}: File exists");
+                        exit 10;
+                    }
+                    redirect_output( $args{output} || $1);
+                }   
+                
                 # we show body contents only when not following redirects
                 my $is_redirected = $resp{status} && $resp{status}{code} && $resp{status}{code} =~ /^3/;
                 say STDERR "* Ignoring the response-body" if ($is_redirected && $args{location}) && (! $fh->eof ) && ($args{verbose} || $args{debug});
                 binmode(STDOUT, ":raw"); # pass in raw layer to prevent utf8 or cr/lf conversion in binary files
 
-                $content_length = $headers{'content-length'};
+
                 if ($content_length){                                         
                     say STDERR "* need to read $content_length bytes in response" if $args{debug};
                 } else {
@@ -1410,7 +1464,7 @@ sub process_stomp {
     my $url_final = shift;
     my ($IN, $OUT, $ERR, $host, $port, $resp);
 
-    redirect_output();
+    redirect_output($args{output});
     
     ($OUT, $IN, $ERR) = connect_direct_socket($url_final->{host}, $url_final->{port});
 
@@ -2576,6 +2630,10 @@ Set the proxy authentication. Only Basic Auth is supported.
 =item -e, --referer <referer url>
 
 Specify a string for the referer. If followed by ";auto", when following redirections, reuse the previous url as referer. ";auto" can also be used alone with redirections.
+
+=item -J, --remote-header-name
+
+With -O --remote-name, use the name provided by Content-disposition: filename instead of URL.
 
 =item -O, --remote-name
 
