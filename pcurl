@@ -24,7 +24,7 @@ use Socket qw(IPPROTO_TCP TCP_NODELAY);
 use Time::Local;
 # use Carp::Always;
 
-our $VERSION = '0.9.1';
+our $VERSION = '0.9.2';
 $|++; # auto flush messages
 
 $Data::Dumper::Sortkeys = 1;
@@ -1160,28 +1160,9 @@ sub perform_action {
     if ($action->{what} eq 'header'){
         say STDOUT $resp->{headers}{lc $action->{value}};
     } elsif ($action->{what} eq 'json'){
-        my $hash = from_json(${$resp->{captured}});
-        if ($hash){
-            # say Dumper $js;
-            my $jp = $action->{value};
-            my $jval = get_jpath($hash, $jp) // '<null>'; # if undef value, stringify to avoid message
-            say STDOUT $jval; 
-        } else {
-            say STDERR "Request did not returned a valid JSON for an action.";
-            exit 8;
-        }
+        json_action($action, $url, $resp);
     } elsif ($action->{what} eq 'xml'){
-        my $treepp = XML::TreePP->new();
-        my $hash = $treepp->parse($resp->{captured});
-        if ($hash){
-            # say Dumper $js;
-            my $jp = $action->{value};
-            my $jval = get_jpath($hash, $jp);
-            say STDOUT $jval;
-        } else {
-            say STDERR "Request did not returned a valid XML for an action.";
-            exit 9;
-        }
+        xml_action($action, $url, $resp);
     } elsif ($action->{what} eq 'bodyrx'){
         if (${$resp->{captured}} =~ /$action->{value}/){
             say STDOUT $&;
@@ -1194,48 +1175,88 @@ sub perform_action {
             say STDOUT $_ for @links;
         }
     } elsif ($action->{what} eq 'getlinked' && !$action->{done}){
-        my @links = ${$resp->{captured}} =~ /<a.*href="([^"]+)"/g;
-        my @reqs;
-        if ($action->{value}){
-            say STDERR "grepping on $action->{value}" if $args{debug};
-            @reqs = grep { /$action->{value}/ } @links;
-        } else {
-            @reqs = @links;
-        }
-        # say for @reqs;
-        for my $r (@reqs){
-            if ($r =~ /^http/){
-                # arbitrary url
-                push @request_list, $r;
-            } else {
-                my $p;
-                if ($r =~ m{^/}){
-                    # absolute url
-                    $p = $r;
-                } else {
-                    # relative url
-                    $p = $url->{path} . $r;
-                }
-                my $auth = '';
-                if ($url->{'auth:user'}){
-                    $auth = $url->{'auth:user'};
-                    if ($url->{'auth:password'}){
-                        $auth .= ':' . $url->{'auth:password'};
-                    }
-                    $auth .= '@';
-                }
-                my $u = sprintf("%s://%s%s:%d%s",
-                                $url->{scheme},
-                                $auth,
-                                $url->{host},
-                                $url->{port},
-                                $p);
-                push @request_list, $u;
-            }
-        }
+        getlinked_action($action, $url, $resp);
     }
 
 }
+
+sub json_action {
+    my ($action, $url, $resp) = @_;
+    my $hash = from_json(${$resp->{captured}});
+    if ($hash){
+        # say Dumper $js;
+        my $jp = $action->{value};
+        my $jval = get_jpath($hash, $jp) // '<null>'; # if undef value, stringify to avoid message
+        say STDOUT $jval; 
+    } else {
+        say STDERR "Request did not returned a valid JSON for an action.";
+        exit 8;
+    }
+}
+
+sub xml_action {
+    my ($action, $url, $resp) = @_;
+        my $treepp = XML::TreePP->new();
+        my $hash = $treepp->parse($resp->{captured});
+        if ($hash){
+            # say Dumper $js;
+            my $jp = $action->{value};
+            my $jval = get_jpath($hash, $jp);
+            say STDOUT $jval;
+        } else {
+            say STDERR "Request did not returned a valid XML for an action.";
+            exit 9;
+        }
+}
+
+sub getlinked_action {
+    my ($action, $url, $resp) = @_;
+    my @links = ${$resp->{captured}} =~ /<a.*href="([^"]+)"/g;
+    my @reqs;
+    if ($action->{value}){
+        say STDERR "grepping on $action->{value}" if $args{debug};
+        @reqs = grep { /$action->{value}/ } @links;
+    } else {
+        @reqs = @links;
+    }
+    # say for @reqs;
+    my %dups;
+    for my $r (@reqs){
+        next if $dups{$r};
+        $dups{$r}++;
+        if ($r =~ /^http/){
+            # arbitrary url
+            push @request_list, $r;
+        } else {
+            my $p;
+            if ($r =~ m{^/}){
+                # absolute url
+                $p = $r;
+            } else {
+                # relative url
+                $p = $url->{path} . $r;
+            }
+            my $auth = '';
+            if ($url->{'auth:user'}){
+                $auth = $url->{'auth:user'};
+                if ($url->{'auth:password'}){
+                    $auth .= ':' . $url->{'auth:password'};
+                }
+                $auth .= '@';
+            }
+            my $u = sprintf("%s://%s%s:%d%s",
+                            $url->{scheme},
+                            $auth,
+                            $url->{host},
+                            $url->{port},
+                            $p);
+            push @request_list, $u;
+        }
+    }
+}
+
+
+# =========== Built-in JSON parser =============================================
 
 sub TRACE_JSON {
     return $args{'debug-json'} ? 1 : 0;
@@ -1462,6 +1483,8 @@ sub to_json {
     return $j;
 }
 
+# =========== End of Built-in JSON parser ======================================
+    
 # get a value from a structure using an xpath-like
 # can be a scalar or a complex struct
 # in case of complex struct, return the jsonification   
