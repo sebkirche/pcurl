@@ -223,6 +223,7 @@ Action can be of type:
     * `pcurl http://some.host.com/some/path/ --action 'listlinks:\.pdf$'
     * `pcurl http://some.host.com/some/path/ --action 'getlinked:^[^?].*[^/]$'` => get all linked files but directories and sort links
     * `pcurl http://some.host.com/some/path/ --action 'getlinked-tree:^[^?].*[^/]$' -R` => get all linked files but directories and sort links, keep the directory structure and file times
+
     
 Return codes
 ------------
