@@ -852,7 +852,7 @@ NO_BIN
                         }
                     } else {
                         if ($url_final->{url} =~ m{\/([^/]+)$}){
-                            $fname = $1;
+                            $fname = urldecode($1);
                         } else {
                             unless ($process_action && $process_action->{what} eq 'getlinked'){
                                 say STDERR "Cannot get remote file name from url.";
