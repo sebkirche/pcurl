@@ -62,7 +62,8 @@ my %defports = ( http  => 80,
 my $STDOLD;
 my $is_out_redirected = 0;
 my ($uagent, $http_vers, $tunnel_pid, $auto_ref, $use_cookies, $cookies, $process_action);
-
+my %local_dests;
+    
 my @getopt_defs = (
     'accept=s',
     'action=s',
@@ -416,11 +417,11 @@ sub process_http {
     } while ($resp->{byte_len} && $url_final && $redirs >= 0);
   BREAK:
     restore_output();
-    if ($args{'remote-time'} && $args{output} && $resp->{headers}{'last-modified'}){
+    if ($args{'remote-time'} && $resp->{redirected} && $resp->{headers}{'last-modified'}){
         my $timestamp = $resp->{headers}{'last-modified'};
         my $epoch = str2epoch($timestamp);
         if ($epoch > -1){
-            utime($epoch, $epoch, $args{output}) or say STDERR "Cannot set modification time of $args{output}: $!";
+            utime($epoch, $epoch, $resp->{redirected}) or say STDERR "Cannot set modification time of $resp->{redirected}: $!";
         }
     }
 
@@ -851,10 +852,15 @@ NO_BIN
                             $fname = $remote_header_name;
                         }
                     } else {
-                        if ($url_final->{url} =~ m{\/([^/]+)$}){
+                        if ($local_dests{$url_final->{url}}){
+                            $fname = $local_dests{$url_final->{url}};
+                            make_path($fname);
+                        }
+                        # get filename from url
+                        elsif ($url_final->{url} =~ m{/([^/]+)$}){
                             $fname = urldecode($1);
                         } else {
-                            unless ($process_action && $process_action->{what} eq 'getlinked'){
+                            unless ($process_action && index($process_action->{what}, 'getlinked') == 0){
                                 say STDERR "Cannot get remote file name from url.";
                                 exit 7;
                             }
@@ -862,9 +868,11 @@ NO_BIN
                     }
                 } elsif ($args{output}){
                     $fname = $args{output};
+                    make_path($fname);
                 }
                 if ($fname){
                     redirect_output($fname);
+                    $resp{redirected} = $fname;
                 }
                 
                 # we show body contents only when not following redirects
@@ -1129,21 +1137,21 @@ HEADER
 sub parse_process_action {
     my $param = shift;
     my $action;
-    if ($param =~ /^(\w+):(.*)/){
+    if ($param =~ /^([\w-]+):(.*)/){
         my $type = $1;
         my $param = $2 || '';
         if ($type eq 'header'){
-            $action = { what => 'header', value => $param };
+            $action = { what => $type, value => $param };
         } elsif ($type eq 'bodyrx'){
-            $action = { what => 'bodyrx', value => $param };
+            $action = { what => $type, value => $param };
         } elsif ($type eq 'listlinks'){
-            $action = { what => 'listlinks', value => $param };
-        } elsif ($type eq 'getlinked'){
-            $action = { what => 'getlinked', value => $param };
+            $action = { what => $type, value => $param };
+        } elsif (index($type, 'getlinked') == 0){ # getlinked / getlinked-tree
+            $action = { what => $type, value => $param };
         } elsif ($type eq 'json'){
-            $action = { what => 'json', value => $param };
+            $action = { what => $type, value => $param };
         } elsif ($type eq 'xml'){
-            $action = { what => 'xml', value => $param };
+            $action = { what => $type, value => $param };
         } else {
             say STDERR "Unknown action $type";
             exit 10;
@@ -1174,7 +1182,7 @@ sub perform_action {
         } else {
             say STDOUT $_ for @links;
         }
-    } elsif ($action->{what} eq 'getlinked' && !$action->{done}){
+    } elsif (index($action->{what}, 'getlinked') == 0 && !$action->{done}){
         getlinked_action($action, $url, $resp);
     }
 
@@ -1211,7 +1219,7 @@ sub xml_action {
 
 sub getlinked_action {
     my ($action, $url, $resp) = @_;
-    my @links = ${$resp->{captured}} =~ /<a.*href="([^"]+)"/g;
+    my @links = ${$resp->{captured}} =~ /<a.*href="([^"]+)"/g; # dumb link collector
     my @reqs;
     if ($action->{value}){
         say STDERR "grepping on $action->{value}" if $args{debug};
@@ -1221,19 +1229,22 @@ sub getlinked_action {
     }
     # say for @reqs;
     my %dups;
-    for my $r (@reqs){
+    for my $r (@reqs){          # rebuild the list of urls from the anchors
         next if $dups{$r};
         $dups{$r}++;
+        my $local_dest = '';
         if ($r =~ /^http/){
-            # arbitrary url
+            # arbitrary fully qualified url
             push @request_list, $r;
         } else {
             my $p;
             if ($r =~ m{^/}){
-                # absolute url
+                # absolute url, use it instead of current path + link
                 $p = $r;
             } else {
-                # relative url
+                # relative url, add to the current path
+                $local_dest = $r if $action->{what} eq 'getlinked-tree';
+                $r =~ s/ /%20/g;
                 $p = $url->{path} . $r;
             }
             my $auth = '';
@@ -1250,6 +1261,7 @@ sub getlinked_action {
                             $url->{host},
                             $url->{port},
                             $p);
+            $local_dests{$u} = $local_dest if $local_dest; # store the local relative path
             push @request_list, $u;
         }
     }
@@ -1689,6 +1701,22 @@ sub parse_url {
         say(STDERR "*  $_ = " . (defined $url->{$_} ? $url->{$_} : "undef")) for(sort(keys %$url));
     }
     return $url;
+}
+
+# make local directory tree
+sub make_path {
+    my ($path, $from) = @_;
+    if (index($path, '/') == 0){
+        make_path(substr($path, 1));
+    } elsif ($path =~ m{([^/]+)/.+$}){
+        my $d = $1;
+        my $dir_to_create = $d;
+        $dir_to_create = $from . "/$dir_to_create" if $from;
+        unless (-d $dir_to_create){
+            mkdir $dir_to_create or die "Cannot create directory $dir_to_create: $!";
+        }
+        make_path(substr($path, length($d) + 1), $d);
+    } # else a file?
 }
 
 # try to interpret the Last-Modified timestamp
