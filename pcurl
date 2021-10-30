@@ -55,7 +55,7 @@ $SIG{CONT} = sub { $SIG{TSTP} = \&suspend_trap; say STDERR "SIGCONT received - c
 
 my $max_redirs = 50;            # default value for maximum redirects to follow
 my $def_max_wait = 10;          # default value for response timeout
-my %defports = ( http  => 80,
+my %defports = ( http  => 80,   # default ports
                  https => 443,
                  stomp => 61613,
                  dict  => 2628
@@ -64,6 +64,7 @@ my %defports = ( http  => 80,
 # when writing output in a file, holder of the initial STDOUT
 my $STDOLD;
 my $is_out_redirected = 0;
+my $initial_name_before_redirect;
 my ($uagent, $http_vers, $tunnel_pid, $auto_ref, $use_cookies, $cookies, $process_action);
 my %local_dests;
     
@@ -353,6 +354,21 @@ sub process_http {
 
     $max_redirs = $args{'max-redirs'} if defined $args{'max-redirs'};
     my $redirs = $max_redirs;   # redirs is a countdown of remaining allowed redirections
+
+    # set the filename for output
+    my $fname;
+    if ($args{output}){
+        $fname = $args{output};
+        make_path($fname);
+    } elsif ($args{'remote-name'}
+             && !$args{'remote-header-name'}
+             && $url_final->{url} =~ m{/([^/]+)$}){
+        $fname = urldecode($1);
+    }
+    if ($fname){
+        redirect_output($fname);
+    }
+    
     do {
         say STDERR "* Processing url $url_final->{url}" if $args{verbose} || $args{debug};
         my $url_proxy = get_proxy_settings($url_final);
@@ -871,6 +887,7 @@ NO_BIN
                         }
                     } else {
                         if ($local_dests{$url_final->{url}}){
+                            # if this is a file from crawler mode
                             $fname = $local_dests{$url_final->{url}};
                             make_path($fname);
                         }
@@ -884,9 +901,9 @@ NO_BIN
                             }
                         }
                     }
-                } elsif ($args{output}){
-                    $fname = $args{output};
-                    make_path($fname);
+                # } elsif ($args{output}){
+                    # $fname = $args{output};
+                    # make_path($fname);
                 }
                 if ($fname){
                     redirect_output($fname);
@@ -1248,7 +1265,7 @@ sub getlinked_action {
     # say for @reqs;
     my %dups;
     for my $r (@reqs){          # rebuild the list of urls from the anchors
-        next if $dups{$r};
+        next if $dups{$r};      # avoid multiple downloads
         $dups{$r}++;
         my $local_dest = '';
         if ($r =~ /^http/){
