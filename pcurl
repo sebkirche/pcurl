@@ -350,7 +350,7 @@ sub process_http {
     my $method = shift;
     my $url_final = shift;
 
-    my ($IN, $OUT, $ERR, $host, $port, $resp);
+    my ($IN, $OUT, $ERR, $host, $port, $resp, $following);
 
     $max_redirs = $args{'max-redirs'} if defined $args{'max-redirs'};
     my $redirs = $max_redirs;   # redirs is a countdown of remaining allowed redirections
@@ -402,14 +402,19 @@ sub process_http {
         # Write to the server
         send_http_request($IN, $OUT, $ERR, $headers, $body);
         
-        # for some actions we need to capure the output
+        # for some actions we need to capure the output into a variable
         my $need_capture = defined $process_action && !$process_action->{done}; # && $process_action->{action} eq 'grep';
 
         # Receive the response
-        $resp = process_http_response($IN, $ERR, $url_final, $url_proxy, $need_capture);
+        $resp = process_http_response($IN, $ERR, $url_final, $url_proxy, $need_capture, $following);
         say STDERR Dumper $resp->{headers} if $args{debug};
         say STDERR "* received $resp->{byte_len} bytes" if $args{verbose} || $args{debug};
         if ($resp->{byte_len}){
+            # save the captured data into a file
+            if ($resp->{captured} && $process_action && index($process_action->{what}, 'getlinked') == 0 ){
+                say STDOUT ${$resp->{captured}} if defined ${$resp->{captured}};
+            }
+            
             my $code = $resp->{status}{code};
             say STDERR '* ' . $url_final->{url} . ' -> ' . $code if $args{verbose} || $args{debug};
             if ($args{location} && (300 <= $code) && ($code <= 399)){
@@ -418,6 +423,7 @@ sub process_http {
                     say STDERR sprintf("* Maximum (%d) redirects followed", $max_redirs);
                     goto BREAK;
                 }
+                $following++;
                 $args{referer} = $url_final->{url} if $auto_ref;      # use previous url as next referer
                 my ($old_scheme, $old_host, $old_port) = ($url_final->{scheme}, $url_final->{host}, $url_final->{port});
                 $url_final = parse_url($resp->{headers}{location}); # get redirected url
@@ -754,7 +760,7 @@ sub build_http_proxy_headers {
 # - byte_len: the size of the response
 # - captured: when performing actions, store the response content in this key
 sub process_http_response {
-    my ($IN, $ERR, $url_final, $url_proxy, $need_capture) = @_;
+    my ($IN, $ERR, $url_final, $url_proxy, $need_capture, $following) = @_;
     my $headers_done = 0;       # flag to know if we are processing headers or body
     my $status_done = 0;        # flag to know if we have processed the status
     my $received = 0;           # counter for total bytes received
@@ -767,7 +773,7 @@ sub process_http_response {
     # when we receive the server response, we print the result to STDOUT (and possibly the headers)
     # but when we need to process actions (e.g. for pattern matching) we capture output to a memory buffer
     
-    # if we need to capture the output, keep the original STDOUT
+    # if we need to capture the output, store the original STDOUT
     my $STDOUT_UNCAPTURED;
     if ($need_capture){
         open $STDOUT_UNCAPTURED, '>&', STDOUT;
@@ -858,16 +864,20 @@ sub process_http_response {
 
                 # avoid unwanted binary output
                 $content_length = $headers{'content-length'};
-                if ($headers{'content-type'} && $headers{'content-type'} =~ /charset=binary/){
-                    if (!$args{output}
-                        && (!$args{'remote-name'} && !$args{'remote-header-name'})
-                        && -t STDOUT){
-                        prefix_print(\*STDERR, 'Warning: ', <<"NO_BIN");
+                if ($headers{'content-type'}){
+                    if ($headers{'content-type'} =~ /charset=binary/){
+                        if (!$args{output}
+                            && (!$args{'remote-name'} && !$args{'remote-header-name'})
+                            && -t STDOUT){
+                            prefix_print(\*STDERR, 'Warning: ', <<"NO_BIN");
 Binary output can mess up your terminal. Use "--output -" to tell 
 curl to output it to your terminal anyway, or consider "--output 
 <FILE>" to save to a file.
 NO_BIN
-                        exit 10;
+                            exit 10;
+                        }
+                    } elsif ($headers{'content-type'} eq 'text/html'){
+                        # TODO: process links when recursive
                     }
                 }
 
@@ -895,7 +905,7 @@ NO_BIN
                         elsif ($url_final->{url} =~ m{/([^/]+)$}){
                             $fname = urldecode($1);
                         } else {
-                            unless ($process_action && index($process_action->{what}, 'getlinked') == 0){
+                            unless ($following || $process_action && index($process_action->{what}, 'getlinked') == 0){
                                 say STDERR "Cannot get remote file name from url.";
                                 exit 7;
                             }
@@ -964,6 +974,7 @@ NO_BIN
         close STDOUT;
         open (STDOUT, '>&', $STDOUT_UNCAPTURED);
     }
+
     say STDERR "Parsed cookies: ", Dumper $cookies if $args{debug};
     say STDERR "* end of response" if $args{debug};
     return \%resp;
@@ -1240,7 +1251,7 @@ sub json_action {
 sub xml_action {
     my ($action, $url, $resp) = @_;
         my $treepp = XML::TreePP->new();
-        my $hash = $treepp->parse($resp->{captured});
+        my $hash = $treepp->parse(${$resp->{captured}});
         if ($hash){
             # say Dumper $js;
             my $jp = $action->{value};
