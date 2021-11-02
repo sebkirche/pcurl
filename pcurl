@@ -54,19 +54,21 @@ $SIG{CONT} = sub { $SIG{TSTP} = \&suspend_trap; say STDERR "SIGCONT received - c
 # --------------------------------------------------
 
 my $max_redirs = 50;            # default value for maximum redirects to follow
+my $max_levels = 5;             # default max recursion level
 my $def_max_wait = 10;          # default value for response timeout
 my %defports = ( http  => 80,   # default ports
                  https => 443,
                  stomp => 61613,
                  dict  => 2628
     );
+my $default_page = 'index.html'; # default name for directory index
 
 # when writing output in a file, holder of the initial STDOUT
 my $STDOLD;
 my $is_out_redirected = 0;
 my $initial_name_before_redirect;
 my ($uagent, $http_vers, $tunnel_pid, $auto_ref, $use_cookies, $cookies, $process_action);
-my %local_dests;
+my %rel_url_to_local_dir;
     
 my @getopt_defs = (
     'accept=s',
@@ -115,7 +117,16 @@ my @getopt_defs = (
     'url=s',
     'user-agent|A=s',
     'verbose|v',
-    'version|V'                 # comment this out to have the built-in version handler that shows program/Getopt/Perl versions
+    'version|V',                # comment this out to have the built-in version handler that shows program/Getopt/Perl versions
+    # recursive options
+    'recursive|r',
+    'recursive-flat|F',
+    'accept=s',                 # a coma-separated list
+    'accept-regex=s',
+    'reject=s',                 # a coma-separated list
+    'reject-regex=s',
+    'default-page=s',
+    'span-hosts',
     );
 
 if ($Getopt::Long::VERSION >= '2.39') { # Getopt::Long does not support alias with dots before 2.39
@@ -212,6 +223,14 @@ unless ($cli_url){
     pod2usage(-exitval => 1);
 }
 
+my $acceptrx = $args{'accept-regex'};
+my $rejectrx = $args{'reject-regex'};
+$acceptrx = '(' . join ('|', split(/,/, $args{accept})) . ')$' if $args{accept}; 
+$rejectrx = '(' . join ('|', split(/,/, $args{reject})) . ')$' if $args{reject};
+
+my $index_name = $args{'default-page'} || $default_page;
+
+my %processed_requests;
 my @request_list;
 push @request_list, $cli_url;
 process_loop();
@@ -324,7 +343,7 @@ sub prefix_print {
 
 # redirect STDOUT to a file
 # unless the out name is '-' to allow binary output to STDOUT
-sub redirect_output {
+sub redirect_output_to_file {
     my $out_name = shift;
     if (!$is_out_redirected && $out_name && $out_name ne '-'){
         open $STDOLD, '>&', STDOUT;
@@ -355,18 +374,34 @@ sub process_http {
     $max_redirs = $args{'max-redirs'} if defined $args{'max-redirs'};
     my $redirs = $max_redirs;   # redirs is a countdown of remaining allowed redirections
 
-    # set the filename for output
+    # set the filename for output when redirecting or using url name
     my $fname;
     if ($args{output}){
         $fname = $args{output};
         make_path($fname);
-    } elsif ($args{'remote-name'}
-             && !$args{'remote-header-name'}
-             && $url_final->{url} =~ m{/([^/]+)$}){
-        $fname = urldecode($1);
+    } elsif ($args{'remote-name'} && !$args{'remote-header-name'}){
+        if ($rel_url_to_local_dir{$url_final->{url}}){
+            # if this is a file from crawler mode
+            $fname = $rel_url_to_local_dir{$url_final->{url}};
+            if ($fname =~ m{/$}){
+                $fname .= "/${default_page}";
+            }
+            make_path($fname);
+        } elsif ($url_final->{path} =~ m{/([^/]+)$}){
+            # get filename from url
+            $fname = urldecode($1);
+        } elsif ($url_final->{path} =~ m{/$}){
+            $fname .= "${default_page}";
+            # make_path($fname);
+        } else {
+            unless ($following || $process_action && index($process_action->{what}, 'getlinked') == 0){
+                say STDERR "Cannot get remote file name from url.";
+                exit 7;
+            }
+        }
     }
     if ($fname){
-        redirect_output($fname);
+        redirect_output_to_file($fname);
     }
     
     do {
@@ -410,11 +445,6 @@ sub process_http {
         say STDERR Dumper $resp->{headers} if $args{debug};
         say STDERR "* received $resp->{byte_len} bytes" if $args{verbose} || $args{debug};
         if ($resp->{byte_len}){
-            # save the captured data into a file
-            if ($resp->{captured} && $process_action && index($process_action->{what}, 'getlinked') == 0 ){
-                say STDOUT ${$resp->{captured}} if defined ${$resp->{captured}};
-            }
-            
             my $code = $resp->{status}{code};
             say STDERR '* ' . $url_final->{url} . ' -> ' . $code if $args{verbose} || $args{debug};
             if ($args{location} && (300 <= $code) && ($code <= 399)){
@@ -445,23 +475,38 @@ sub process_http {
                 goto BREAK;
             } else {
                 # result other than redirect
+                if ($process_action){
+                    if (!$process_action->{done}){
+                        perform_action($process_action, $url_final, $resp);
+                        $process_action->{done} = 1;
+                    }
+                } elsif ($resp->{headers} && $resp->{headers}{'content-type'} =~ 'text/html'){
+                    push @request_list, discover_links($resp, $url_final, $acceptrx, $rejectrx, !$args{'recursive-flat'});
+                }                                   
 
-                if ($process_action && !$process_action->{done}){
-                    perform_action($process_action, $url_final, $resp);
-                    $process_action->{done} = 1;
+                # save eventually the captured data into a file for getlinked or recursive
+                if ($resp->{captured}
+                    && (
+                        ($process_action && index($process_action->{what}, 'getlinked') == 0)
+                        ||
+                        $args{recursive}
+                    )){
+                    say STDOUT ${$resp->{captured}} if defined ${$resp->{captured}};
                 }
-                
+
                 goto BREAK;         # weird, 'last' is throwing a warning "Exiting subroutine via last"
             }
         }
     } while ($resp->{byte_len} && $url_final && $redirs >= 0);
   BREAK:
     restore_output();
-    if ($args{'remote-time'} && $resp->{redirected} && $resp->{headers}{'last-modified'}){
+    if ($args{'remote-time'}
+        && $fname #$resp->{redirected}
+        && $resp->{headers}{'last-modified'}){
         my $timestamp = $resp->{headers}{'last-modified'};
         my $epoch = str2epoch($timestamp);
         if ($epoch > -1){
-            utime($epoch, $epoch, $resp->{redirected}) or say STDERR "Cannot set modification time of $resp->{redirected}: $!";
+            utime($epoch, $epoch, $fname) or say STDERR "Cannot set modification time of $resp->{redirected}: $!";
         }
     }
 
@@ -484,7 +529,7 @@ sub process_file {
     say STDERR "* size of $path is $size" if $args{debug};
     $resp->{byte_len} = $size;
 
-    redirect_output($args{output});
+    redirect_output_to_file($args{output});
 
     open (my $fh, '<', $path) or die "Couldn't open file $path: $!";
     if (defined $process_action){
@@ -876,12 +921,15 @@ curl to output it to your terminal anyway, or consider "--output
 NO_BIN
                             exit 10;
                         }
-                    } elsif ($headers{'content-type'} eq 'text/html'){
-                        # TODO: process links when recursive
+                    } elsif ($args{recursive} && $headers{'content-type'} =~ m{text/html}){
+                        open $STDOUT_UNCAPTURED, '>&', STDOUT;
+                        close STDOUT;
+                        open STDOUT, '>', \$capture or die "Cannot capture output: $!";
+                        $need_capture = 1;
                     }
                 }
 
-                # try to get the output file name from url, or header
+                # try to get the output file name from header
                 my $fname = '';
                 if ($args{'remote-name'}){
                     if ($args{'remote-header-name'}
@@ -895,28 +943,12 @@ NO_BIN
                         } else {
                             $fname = $remote_header_name;
                         }
-                    } else {
-                        if ($local_dests{$url_final->{url}}){
-                            # if this is a file from crawler mode
-                            $fname = $local_dests{$url_final->{url}};
-                            make_path($fname);
-                        }
-                        # get filename from url
-                        elsif ($url_final->{url} =~ m{/([^/]+)$}){
-                            $fname = urldecode($1);
-                        } else {
-                            unless ($following || $process_action && index($process_action->{what}, 'getlinked') == 0){
-                                say STDERR "Cannot get remote file name from url.";
-                                exit 7;
-                            }
-                        }
                     }
-                # } elsif ($args{output}){
-                    # $fname = $args{output};
-                    # make_path($fname);
                 }
                 if ($fname){
-                    redirect_output($fname);
+                    # we received the name from server
+                    # we should not have redirected in this case
+                    redirect_output_to_file($fname);
                     $resp{redirected} = $fname;
                 }
                 
@@ -969,7 +1001,7 @@ NO_BIN
     $resp{byte_len} = $received; # keep the size of read data
     if ($need_capture){
         # restore the output to the original value before capture
-        say STDERR sprintf("* Captured %d bytes:\n%s", length $capture, $capture) if $args{verbose} || $args{debug};
+        say STDERR sprintf("* Captured %d bytes:\n%s", length $capture, $capture // '') if $args{debug};
         $resp{captured} = \$capture;
         close STDOUT;
         open (STDOUT, '>&', $STDOUT_UNCAPTURED);
@@ -1229,7 +1261,8 @@ sub perform_action {
             say STDOUT $_ for @links;
         }
     } elsif (index($action->{what}, 'getlinked') == 0 && !$action->{done}){
-        getlinked_action($action, $url, $resp);
+        my @refs = getlinked_action($action, $url, $resp);
+        push @request_list, @refs;
     }
 
 }
@@ -1265,33 +1298,73 @@ sub xml_action {
 
 sub getlinked_action {
     my ($action, $url, $resp) = @_;
-    my @links = ${$resp->{captured}} =~ /<a.*href="([^"]+)"/g; # dumb link collector
+    discover_links($resp, $url, $action->{value}, undef, ($action->{what} eq 'getlinked-tree'))
+}
+
+sub discover_links {
+    my ($resp, $url, $acc, $rej, $keep_tree) = @_;
+    my @links = grep { defined } ${$resp->{captured}} =~ /<(?:a.*href="([^"]+)"|img.*src="([^"]+)")/g; # dumb link collector
     my @reqs;
-    if ($action->{value}){
-        say STDERR "grepping on $action->{value}" if $args{debug};
-        @reqs = grep { /$action->{value}/ } @links;
-    } else {
-        @reqs = @links;
+    if ($acc || $rej){
+        if ($acc){
+            say STDERR "grepping accept on $acc" if $args{debug};
+            @links = grep { /$acc/ } @links;
+        }
+        if ($rej){
+            say STDERR "grepping reject on $rej" if $args{debug};
+            @links = grep { ! /$rej/ } @links;
+        }            
     }
+    @reqs = @links;
+    
     # say for @reqs;
+    my @discovered_urls;
     my %dups;
     for my $r (@reqs){          # rebuild the list of urls from the anchors
         next if $dups{$r};      # avoid multiple downloads
+        next if $r =~ /^mailto:/;
+        next if $r =~ m{\.\./}; # FIXME: transform relative into absolute
         $dups{$r}++;
         my $local_dest = '';
-        if ($r =~ /^http/){
+        if ($r =~ /^https?:/){
             # arbitrary fully qualified url
-            push @request_list, $r;
+            my $linked = parse_url($r);
+            if (!$linked->{host}
+                || $linked->{host} eq $url->{host}
+                || $args{'span-hosts'}){
+                push @request_list, $r;
+            }
         } else {
             my $p;
+            my $parent_dir = '';
+            $parent_dir = $url->{path} =~ s{[^/]*$}{}r;
+            if (!$keep_tree){
+                $local_dest = $r =~ s{^.*/}{}r;
+                # $parent_dir = '/';
+            } else {
+                if ($r =~ m{^/}){
+                    $local_dest = $r;
+                } else {
+
+                    if ($parent_dir){
+                        $local_dest = "$parent_dir$r";
+                    } else {
+                        $local_dest = $r;
+                    }
+                }
+            }
+            $local_dest =~ s{^/}{};
+            $local_dest =~ s/%20/ /g;
             if ($r =~ m{^/}){
-                # absolute url, use it instead of current path + link
+               # absolute local url, use it instead of current path + link
+#                $r =~ s/ /%20/g;
                 $p = $r;
             } else {
-                # relative url, add to the current path
-                $local_dest = $r if $action->{what} eq 'getlinked-tree';
-                $r =~ s/ /%20/g;
-                $p = $url->{path} . $r;
+                # relative local url, add to the current path
+#                $local_dest = $r if $keep_tree;
+                #                $r =~ s/ /%20/g;
+                
+                $p = "$parent_dir$r";
             }
             my $auth = '';
             if ($url->{'auth:user'}){
@@ -1307,10 +1380,21 @@ sub getlinked_action {
                             $url->{host},
                             $url->{port},
                             $p);
-            $local_dests{$u} = $local_dest if $local_dest; # store the local relative path
-            push @request_list, $u;
+            $rel_url_to_local_dir{$u} = $local_dest if $local_dest; # store the local relative path
+            unless(exists $processed_requests{$u}){
+                say STDERR "* adding $u to discoverd urls";
+                push @discovered_urls, $u;
+                $processed_requests{$u}++;
+            }
         }
     }
+    say STDERR sprintf("Discovered %d urls:\n%s",
+                       scalar(@discovered_urls),
+                       join("\n", @discovered_urls)) if $args{verbose};
+    if ($args{verbose}){
+        say STDERR sprintf("%s -> %s", $_, $rel_url_to_local_dir{$_}) for keys %rel_url_to_local_dir;
+    }
+    return @discovered_urls;
 }
 
 
@@ -1611,7 +1695,7 @@ sub process_stomp {
     my $url_final = shift;
     my ($IN, $OUT, $ERR, $host, $port, $resp);
 
-    redirect_output($args{output});
+    redirect_output_to_file($args{output});
     
     ($OUT, $IN, $ERR) = connect_direct_socket($url_final->{host}, $url_final->{port});
 
@@ -1733,15 +1817,16 @@ sub parse_url {
 sub make_path {
     my ($path, $from) = @_;
     if (index($path, '/') == 0){
-        make_path(substr($path, 1));
-    } elsif ($path =~ m{([^/]+)/.+$}){
-        my $d = $1;
-        my $dir_to_create = $d;
-        $dir_to_create = $from . "/$dir_to_create" if $from;
-        unless (-d $dir_to_create){
-            mkdir $dir_to_create or die "Cannot create directory $dir_to_create: $!";
+        $path = substr($path, 1);
+    }
+    if ($path =~ m{(.+)/[^/]+$}){
+        my @dirs = split '/', $1;
+        for (my $i=0; $i<= $#dirs; $i++){
+            my $dir_to_create = join '/', @dirs[ 0 .. $i ];
+            unless (-d $dir_to_create){
+                mkdir $dir_to_create or die "Cannot create directory $dir_to_create: $!";
+            }
         }
-        make_path(substr($path, length($d) + 1), $d);
     } # else a file?
 }
 
