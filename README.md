@@ -9,10 +9,11 @@ I support the following protocols:
 * `file:`
 * `stomp:` pseudo protocol: we can make limited STOMP SENDs, initial intent was to push notifications to ApacheMQ
 
-pCurl has its own recursive descent (extended regex based) JSON parser, and can returned processed outputs (called result actions, see below) based on:
+pCurl has its own recursive descent (extended regex based) JSON parser and an embedded XML::TreePP parser, and can returned processed outputs (called result actions, see below) based on:
 * regular expression on the data returned
 * values of the response headers
 * single values or subsets of a JSON response (with builtin jsonification); parsing of a local file is supported with `file:` protocol
+* basic web crawling feature
 
 I am planning to implement a limited set of decision structures (`if`, `case`) capable to define a return value based on a header or a JSON value, or to perform polling until a defined failure or success condition.
 
@@ -220,10 +221,10 @@ Action can be of type:
     * `pcurl http://jsonplaceholder.typicode.com/ --action='bodyrx:Free.*\.'` => `Free fake API for testing and prototyping.`
 
 * spider: show some useful infos when grabbing page contents
-    * `pcurl http://some.host.com/some/path/ --action 'listlinks:\.pdf$'
+    * `pcurl http://some.host.com/some/path/ --action 'listlinks:\.pdf$'`
     * `pcurl http://some.host.com/some/path/ --action 'getlinked:^[^?].*[^/]$'` => get all linked files but directories and sort links
     * `pcurl http://some.host.com/some/path/ --action 'getlinked-tree:^[^?].*[^/]$' -R` => get all linked files but directories and sort links, keep the directory structure and file times
-
+    * see also the `--recursive` parameter
     
 Return codes
 ------------

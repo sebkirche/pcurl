@@ -120,7 +120,7 @@ my @getopt_defs = (
     'verbose|v',
     'version|V',                # comment this out to have the built-in version handler that shows program/Getopt/Perl versions
     # recursive options -------------------------------
-    'accept=s',                 # a coma-separated list
+    'accept-list=s',            # a coma-separated list
     'accept-regex=s',
     'cut-dirs=i',
     'directory-prefix|P=s',
@@ -132,10 +132,10 @@ my @getopt_defs = (
     'recursive|r',
     'recursive-flat|F',
     'relative',
-    'reject=s',                 # a coma-separated list
+    'reject-list=s',            # a coma-separated list
     'reject-regex=s',
-    'summary',
     'span-hosts',
+    'summary',
     );
 
 if ($Getopt::Long::VERSION >= '2.39') { # Getopt::Long does not support alias with dots before 2.39
@@ -2907,6 +2907,8 @@ pCurl is a vanilla Perl tool that mimics cURL without external dependancies but 
 
 =head1 OPTIONS
 
+=head2 General resource access
+
 =over 4
 
 =item --accept <mime type>
@@ -3024,6 +3026,10 @@ Write to file instead of stdout.
 
 Specify explicitly the port. If not used, we use the port from the url (if specified), or we will try well-known port 80 for HTTP and 443 for HTTPS, depending on the url scheme.
 
+=item --progression
+
+Shows the name of retrieved files and their size.
+
 =item -x, --proxy <proxy_url>
 
 Set the url of the HTTP/1.1 proxy to use.
@@ -3081,6 +3087,76 @@ Show both headers during the communication.
 Show version number and quit.
 
 =back
+
+=head2 Web crawling features
+
+In web-crawling mode, a first resource is retrieved then in a recursive way, all related resources (linked html, pictures, css) are also retrieved. 
+
+By default a number of 5 successive jumps from initial url are processed. All the files are stored under a common directory named after the host.
+
+=item --accept-list <coma-separated list>
+
+Specify a list of accepted file extensions
+
+=item --accept-regex <pattern>
+
+Specify a pattern that will be validated to accept urls
+
+=item --cut-dirs <number of levels>
+
+Specify a number of path levels to remove from all links.
+
+=item --directory-prefix <common path>
+
+Specify a path to prepend for all retrieved resources.
+
+=item --default-page <file name>
+
+Specify the name of the index file when directory browsing is allowed by the server. Default is 'index.html'
+
+=item -l, --level <number>
+
+Specify the maximum number of jump to explore from initial url. Default is 5. 0 is equivalent to 'get all site'.
+
+=item --no-host-directories
+
+Allow to disable the creation of a common ancestor named after the host name for all retrieved resources.
+
+=item --np, --no-parent
+
+Prevent the crawling to go back to the parent of the given url.
+
+=item --page-requisites
+
+Will help to get linked resources (pictures, css) even if stored in a higher directory than resource.
+
+=item -r, --recursive
+
+Use the web-crawling mode: get as many linked resources as possible.
+
+=item --recursive-flat
+
+Disable the creation of directories, all related resources will be stored in the same directory.
+
+=item --relative
+
+Tell that you want to take into account only relative links.
+
+=item --reject-list <coma-separated list>
+
+Specify a list of ignored file extensions
+
+=item --reject-regex <pattern>
+
+Specify a pattern that will be validated to ignore urls
+
+=item --span-hosts
+
+Allow to process resources from external web sites. Beware if you set also --level 0: you will download the whole Internet! ;o)
+
+=item --summary
+
+Ask for a final list of retrieved resources, if you do not want to see other details.
 
 =cut
 
