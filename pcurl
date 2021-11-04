@@ -128,7 +128,7 @@ my @getopt_defs = (
     'level|l=i',
     'no-host-directories',
     'no-parent|np',
-    # 'page-requisites',
+    'page-requisites',
     'recursive|r',
     'recursive-flat|F',
     'relative',
@@ -558,7 +558,7 @@ sub process_http {
                         perform_action($process_action, $url_final, $resp, $discovered_links);
                         $process_action->{done} = 1;
                     }
-                } elsif ($resp->{headers}{'content-type'} && $resp->{headers}{'content-type'} =~ 'text/html'){
+                } elsif ($resp->{headers}{'content-type'} && $resp->{headers}{'content-type'} =~ '(text/html|text/css)'){
                     if ($discovered_links){
                         push @$discovered_links, discover_links($resp, $url_final, $acceptrx, $rejectrx, !$args{'recursive-flat'});
                     }
@@ -1004,7 +1004,7 @@ curl to output it to your terminal anyway, or consider "--output
 NO_BIN
                             exit 10;
                         }
-                    } elsif ($args{recursive} && $headers{'content-type'} =~ m{text/html}){
+                    } elsif ($args{recursive} && $headers{'content-type'} =~ m{(text/html|text/css)}){
                         open $STDOUT_UNCAPTURED, '>&', STDOUT;
                         close STDOUT;
                         open STDOUT, '>', \$capture or die "Cannot capture output: $!";
@@ -1390,7 +1390,15 @@ sub discover_links {
 
     # TODO: look only for img/css for first url, unless --page-requisites
 
-    my @links = grep { defined } ${$resp->{captured}} =~ /<(?:a.*href="([^"]+)"|img.*src="([^"]+)")/g; # dumb link collector
+    my @links = grep { defined } ${$resp->{captured}} =~ m{a[^>]+href="([^"]+)"}g; # dumb link collector
+    my @resources = grep { defined } ${$resp->{captured}} =~ m{
+                (?:
+                <img[^>]+src="([^"]+)"
+                |<link[^>]+href="([^"]+)"
+                |background-image:\s*url\(([^\)]+)\)
+                )}gx; # dumb link collector
+    my %requisites;
+    map { $requisites{$_}++ } @resources;
     my @reqs;
     if ($acc || $rej){
         if ($acc){
@@ -1402,7 +1410,7 @@ sub discover_links {
             @links = grep { ! /$rej/ } @links;
         }            
     }
-    @reqs = @links;
+    @reqs = (@links, @resources);
     
     # say for @reqs;
     my @discovered_urls;
@@ -1454,11 +1462,16 @@ sub discover_links {
                 $p = "$parent_dir$r";
             }
             # avoid getting too much of a site if unwanted
-            $p = canonicalize($p);
+            my $canon = canonicalize($p);
             my $current_path = canonicalize($url->{path});
             $current_path =~ s{[^/]*$}{};
-            next unless is_descendant_or_equal($p, $current_path) || !$args{'no-parent'};
-            
+            if ($args{'page-requisites'} && $requisites{$r}){
+                # nothing special
+            } elsif (!is_descendant_or_equal($canon, $current_path) && $args{'no-parent'}){
+                next;
+            }
+                
+            $p = $canon;
             my $auth = auth_string($url);
             my $u = sprintf("%s://%s%s:%d%s",
                             $url->{scheme},
