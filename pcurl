@@ -118,14 +118,22 @@ my @getopt_defs = (
     'user-agent|A=s',
     'verbose|v',
     'version|V',                # comment this out to have the built-in version handler that shows program/Getopt/Perl versions
-    # recursive options
-    'recursive|r',
-    'recursive-flat|F',
+    # recursive options -------------------------------
     'accept=s',                 # a coma-separated list
     'accept-regex=s',
+    'cut-dirs=i',
+    'directory-prefix|P=s',
+    'default-page=s',
+    'level|l=i',
+    'no-host-directories',
+    'no-parent|np',
+    # 'page-requisites',
+    'recursive|r',
+    'recursive-flat|F',
+    'relative',
     'reject=s',                 # a coma-separated list
     'reject-regex=s',
-    'default-page=s',
+    'summary',
     'span-hosts',
     );
 
@@ -229,11 +237,19 @@ $acceptrx = '(' . join ('|', split(/,/, $args{accept})) . ')$' if $args{accept};
 $rejectrx = '(' . join ('|', split(/,/, $args{reject})) . ')$' if $args{reject};
 
 my $index_name = $args{'default-page'} || $default_page;
+my $prefix = '';
+if ($args{'directory-prefix'}){
+    $prefix = $args{'directory-prefix'};
+    $prefix .= '/' if $prefix !~ m{/$};
+}
 
 my %processed_requests;
-my @request_list;
-push @request_list, $cli_url;
-process_loop();
+my $asset_counter = 0;
+process_loop([$cli_url], $args{level} // $max_levels);
+say STDERR sprintf("* Downloaded %d links", scalar(keys %processed_requests)) if $args{verbose} || $args{debug};
+if ($args{summary}){
+    say STDERR $_ for sort keys %processed_requests;
+}
 
 # save the cookie jar if requested
 if ($args{'cookie-jar'}){
@@ -244,10 +260,12 @@ if ($args{'cookie-jar'}){
 # ------- End of main prog ---------------------------------------------------------------
 
 sub process_loop {
+    my ($request_list, $level) = @_;
+    my @discovered_at_this_level;
+    
+    while (@$request_list){
 
-    while (@request_list){
-
-        my $u = shift @request_list;
+        my $u = shift @$request_list;
         my $url = parse_url($u);
         unless ($url){
             say STDERR "It's strange to me that `$u` does not look like an url...";
@@ -282,6 +300,14 @@ sub process_loop {
             $url->{path} = substr($url->{path}, 2);
         }
 
+        my $ustr = sprintf("%s://%s%s:%d%s",
+                            $url->{scheme},
+                            auth_string($url),
+                            $url->{host},
+                            $url->{port},
+                            canonicalize($url->{path}));
+        $processed_requests{$ustr}++;
+        $asset_counter++;
         if ($url->{scheme} =~ /^http/){
             # HTTP or HTTPS
             # version
@@ -313,8 +339,8 @@ sub process_loop {
             } else {
                 $method = $args{head} ? 'HEAD' : $args{request} || 'GET';
             }
-            #$url->{path} = '*' if $method eq 'OPTIONS';    
-            process_http($method, $url);
+            #$url->{path} = '*' if $method eq 'OPTIONS';
+            process_http($method, $url, ($level || (defined $args{level} && $args{level} == 0)) ? \@discovered_at_this_level : undef);
         } elsif ($url->{scheme} =~ /^stomp/){
             unless ($url->{path} && $args{stompmsg}){
                 say STDERR "Message sending with --stompmsg <message> is supported for now.";
@@ -328,9 +354,25 @@ sub process_loop {
                 say STDERR "* Invalid file://hostname/, expected localhost or 127.0.0.1 or none";
                 exit 4;
             }
-            process_file($url);
+            process_file($url, \@discovered_at_this_level);
         }
-
+    }
+    # $asset_counter++;
+    if ($args{recursive}
+        && @discovered_at_this_level
+        && (
+            $level > 0
+            || (defined $args{level} && $args{level} == 0)
+        )
+        ){
+        say STDERR "* processing next level" if $args{verbose} || $args{debug};
+        my $next_level;
+        if ($args{level} > 0){
+            $next_level = $level - 1;
+        } else {
+            $next_level = 1;
+        }
+        process_loop(\@discovered_at_this_level, $next_level);
     }
 }
 
@@ -368,7 +410,8 @@ sub restore_output {
 sub process_http {
     my $method = shift;
     my $url_final = shift;
-
+    my $discovered_links =  shift;
+    
     my ($IN, $OUT, $ERR, $host, $port, $resp, $following);
 
     $max_redirs = $args{'max-redirs'} if defined $args{'max-redirs'};
@@ -378,21 +421,24 @@ sub process_http {
     my $fname;
     if ($args{output}){
         $fname = $args{output};
-        make_path($fname);
     } elsif ($args{'remote-name'} && !$args{'remote-header-name'}){
         if ($rel_url_to_local_dir{$url_final->{url}}){
             # if this is a file from crawler mode
             $fname = $rel_url_to_local_dir{$url_final->{url}};
             if ($fname =~ m{/$}){
-                $fname .= "/${default_page}";
+                $fname .= "/${index_name}";
             }
-            make_path($fname);
-        } elsif ($url_final->{path} =~ m{/([^/]+)$}){
+        } elsif ($url_final->{path} =~ m{.*/([^/]+)$}){
             # get filename from url
-            $fname = urldecode($1);
+            if ($args{recursive} && !$args{'recursive-flat'}){
+                $fname = urldecode($&);
+            } else {
+                $fname = urldecode($1);
+            }
+            $fname = substr($fname, 1); # drop initial /
         } elsif ($url_final->{path} =~ m{/$}){
-            $fname .= "${default_page}";
-            # make_path($fname);
+            $fname = $url_final->{path} . ${index_name};
+            $fname = substr($fname, 1); # drop initial /
         } else {
             unless ($following || $process_action && index($process_action->{what}, 'getlinked') == 0){
                 say STDERR "Cannot get remote file name from url.";
@@ -401,7 +447,35 @@ sub process_http {
         }
     }
     if ($fname){
-        redirect_output_to_file($fname);
+        # process cut-dirs
+        if ($args{recursive} && $args{'cut-dirs'}){
+            # split the path segments
+            my @path = split(m{/}, $fname);
+            my $f = pop @path;  # keep the file
+            # remove the required number of elements
+            if ($args{'recursive-flat'}){
+                @path = ();
+            } else {
+                for (my $i=1; $i <= $args{'cut-dirs'}; $i++){
+                    shift @path;
+                }
+            }
+            if (@path){
+                $fname = join('/', @path) . "/$f";
+            } else {
+                $fname = $f;
+            }
+        }
+        my $h = '';
+        unless ($args{'no-host-directories'}){
+            $h = $url_final->{host};
+            if ($url_final->{port} != $defports{$url_final->{scheme}}){
+                $h .= ':' . $url_final->{port};
+            }
+            $h .= '/';
+        }
+        make_path("${prefix}${h}${fname}");
+        redirect_output_to_file("${prefix}${h}${fname}");
     }
     
     do {
@@ -477,11 +551,13 @@ sub process_http {
                 # result other than redirect
                 if ($process_action){
                     if (!$process_action->{done}){
-                        perform_action($process_action, $url_final, $resp);
+                        perform_action($process_action, $url_final, $resp, $discovered_links);
                         $process_action->{done} = 1;
                     }
-                } elsif ($resp->{headers} && $resp->{headers}{'content-type'} =~ 'text/html'){
-                    push @request_list, discover_links($resp, $url_final, $acceptrx, $rejectrx, !$args{'recursive-flat'});
+                } elsif ($resp->{headers}{'content-type'} && $resp->{headers}{'content-type'} =~ 'text/html'){
+                    if ($discovered_links){
+                        push @$discovered_links, discover_links($resp, $url_final, $acceptrx, $rejectrx, !$args{'recursive-flat'});
+                    }
                 }                                   
 
                 # save eventually the captured data into a file for getlinked or recursive
@@ -506,7 +582,7 @@ sub process_http {
         my $timestamp = $resp->{headers}{'last-modified'};
         my $epoch = str2epoch($timestamp);
         if ($epoch > -1){
-            utime($epoch, $epoch, $fname) or say STDERR "Cannot set modification time of $resp->{redirected}: $!";
+            utime($epoch, $epoch, "${prefix}${fname}") or say STDERR "Cannot set modification time of $resp->{redirected}: $!";
         }
     }
 
@@ -517,6 +593,7 @@ sub process_http {
 
 sub process_file {
     my $url = shift;
+    my $discovered_links = shift;
     my $path = $url->{path};
     my $content;
     my $resp = { headers => {} }; # simulate the network answer for action processing
@@ -537,7 +614,7 @@ sub process_file {
         $content = <$fh>;
         close $fh;
         $resp->{captured} = \$content;
-        perform_action($process_action, $url, $resp);
+        perform_action($process_action, $url, $resp, $discovered_links);
     } else {
         binmode $fh;
         my $buf = '';
@@ -948,8 +1025,8 @@ NO_BIN
                 if ($fname){
                     # we received the name from server
                     # we should not have redirected in this case
-                    redirect_output_to_file($fname);
-                    $resp{redirected} = $fname;
+                    redirect_output_to_file("${prefix}${fname}");
+                    $resp{redirected} = "${prefix}${fname}";
                 }
                 
                 # we show body contents only when not following redirects
@@ -1241,7 +1318,7 @@ sub parse_process_action {
 
 # Do something with the retrieved resource
 sub perform_action {
-    my ($action, $url, $resp) = @_;
+    my ($action, $url, $resp, $discovered_links) = @_;
 
     if ($action->{what} eq 'header'){
         say STDOUT $resp->{headers}{lc $action->{value}};
@@ -1262,7 +1339,7 @@ sub perform_action {
         }
     } elsif (index($action->{what}, 'getlinked') == 0 && !$action->{done}){
         my @refs = getlinked_action($action, $url, $resp);
-        push @request_list, @refs;
+        push @$discovered_links, @refs;
     }
 
 }
@@ -1303,6 +1380,10 @@ sub getlinked_action {
 
 sub discover_links {
     my ($resp, $url, $acc, $rej, $keep_tree) = @_;
+    return () unless $resp->{captured} && ${$resp->{captured}};
+
+    # TODO: look only for img/css for first url, unless --page-requisites
+
     my @links = grep { defined } ${$resp->{captured}} =~ /<(?:a.*href="([^"]+)"|img.*src="([^"]+)")/g; # dumb link collector
     my @reqs;
     if ($acc || $rej){
@@ -1323,7 +1404,6 @@ sub discover_links {
     for my $r (@reqs){          # rebuild the list of urls from the anchors
         next if $dups{$r};      # avoid multiple downloads
         next if $r =~ /^mailto:/;
-        next if $r =~ m{\.\./}; # FIXME: transform relative into absolute
         $dups{$r}++;
         my $local_dest = '';
         if ($r =~ /^https?:/){
@@ -1332,7 +1412,7 @@ sub discover_links {
             if (!$linked->{host}
                 || $linked->{host} eq $url->{host}
                 || $args{'span-hosts'}){
-                push @request_list, $r;
+                push @discovered_urls, $r;
             }
         } else {
             my $p;
@@ -1343,6 +1423,7 @@ sub discover_links {
                 # $parent_dir = '/';
             } else {
                 if ($r =~ m{^/}){
+                    next if $args{relative}; # ignore if we want only relative links
                     $local_dest = $r;
                 } else {
 
@@ -1366,14 +1447,13 @@ sub discover_links {
                 
                 $p = "$parent_dir$r";
             }
-            my $auth = '';
-            if ($url->{'auth:user'}){
-                $auth = $url->{'auth:user'};
-                if ($url->{'auth:password'}){
-                    $auth .= ':' . $url->{'auth:password'};
-                }
-                $auth .= '@';
-            }
+            # avoid getting too much of a site if unwanted
+            $p = canonicalize($p);
+            my $current_path = canonicalize($url->{path});
+            $current_path =~ s{[^/]*$}{};
+            next unless is_descendant_or_equal($p, $current_path) || !$args{'no-parent'};
+            
+            my $auth = auth_string($url);
             my $u = sprintf("%s://%s%s:%d%s",
                             $url->{scheme},
                             $auth,
@@ -1382,7 +1462,7 @@ sub discover_links {
                             $p);
             $rel_url_to_local_dir{$u} = $local_dest if $local_dest; # store the local relative path
             unless(exists $processed_requests{$u}){
-                say STDERR "* adding $u to discoverd urls";
+                # say STDERR "* adding $u to discoverd urls" if $args{verbose} || $args{debug};
                 push @discovered_urls, $u;
                 $processed_requests{$u}++;
             }
@@ -1391,12 +1471,72 @@ sub discover_links {
     say STDERR sprintf("Discovered %d urls:\n%s",
                        scalar(@discovered_urls),
                        join("\n", @discovered_urls)) if $args{verbose};
-    if ($args{verbose}){
-        say STDERR sprintf("%s -> %s", $_, $rel_url_to_local_dir{$_}) for keys %rel_url_to_local_dir;
-    }
+    # if ($args{verbose}){
+        # say STDERR sprintf("%s -> %s", $_, $rel_url_to_local_dir{$_}) for keys %rel_url_to_local_dir;
+    # }
     return @discovered_urls;
 }
 
+sub auth_string {
+    my $url = shift;
+    my $auth = '';
+    if ($url->{'auth:user'}){
+        $auth = $url->{'auth:user'};
+        if ($url->{'auth:password'}){
+            $auth .= ':' . $url->{'auth:password'};
+        }
+        $auth .= '@';
+    }
+    return $auth;
+}
+    
+sub is_descendant_or_equal {
+    my ($other, $current) = @_;
+
+    # keep only paths (note: a directory is supposed to be directory/ )
+    
+    my @other = split(m{/}, $other);
+    my @current = split(m{/}, $current);
+
+    # all are descendant if current is root directory
+    return 1 if $#current == -1;
+        
+    # cannot be descendant if lesser directories
+    return 0 if $#other < $#current;
+    
+    # wget compatibility:
+    # different absolute paths are not retrieved with --no-parent
+    if ($other[0] ne $current[0]){
+        return 0;
+    }
+    my $i;
+    for ($i=1; $i <= $#other && $i <= $#current; $i++){
+        return 0 if $other[$i] ne $current[$i];
+    }
+    return 1;
+}
+
+# compute full path from a possible relative path from another
+# replace . and .. with actual values
+sub canonicalize {
+    my ($path, $rel_to) = @_;
+    if ($path =~ m{^/}){
+        undef $rel_to;
+    }
+    my @st = split(m{/}, $rel_to // '');
+    # $path =~ s{[^/]*$}{};       # remove trailing /
+    for my $d (split(m{/}, $path)){
+        next if $d eq '.';
+        if ($d eq '..'){
+            pop @st;
+        } elsif ($d){
+            push @st, $d;
+        }
+    }
+    my $r = '/' . join('/', @st);
+    $r .= '/' if $path =~ m{/$}; # put back final / if needed
+    return $r;
+}
 
 # =========== Built-in JSON parser =============================================
 
@@ -1819,7 +1959,7 @@ sub make_path {
     if (index($path, '/') == 0){
         $path = substr($path, 1);
     }
-    if ($path =~ m{(.+)/[^/]+$}){
+    if ($path =~ m{(.+)/[^/]*$}){
         my @dirs = split '/', $1;
         for (my $i=0; $i<= $#dirs; $i++){
             my $dir_to_create = join '/', @dirs[ 0 .. $i ];
