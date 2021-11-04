@@ -102,6 +102,7 @@ my @getopt_defs = (
     'output|o=s',
     'parse-only',               # just show how we parse the URL
     'port|p=i',
+    'progression',
     'proxy-user|U=s',
     'proxy10=s',
     'proxy|x=s',
@@ -340,7 +341,10 @@ sub process_loop {
                 $method = $args{head} ? 'HEAD' : $args{request} || 'GET';
             }
             #$url->{path} = '*' if $method eq 'OPTIONS';
-            process_http($method, $url, ($level || (defined $args{level} && $args{level} == 0)) ? \@discovered_at_this_level : undef);
+            # say STDERR $url->{url} if $args{progression} || $args{verbose} || $args{debug};
+            my $r = process_http($method, $url, ($level || (defined $args{level} && $args{level} == 0)) ? \@discovered_at_this_level : undef);
+            say STDERR sprintf("%s -> %s", $url->{url}, humanize_bytes($r->{byte_len})) if $args{progression} || $args{verbose} || $args{debug};
+            
         } elsif ($url->{scheme} =~ /^stomp/){
             unless ($url->{path} && $args{stompmsg}){
                 say STDERR "Message sending with --stompmsg <message> is supported for now.";
@@ -589,6 +593,8 @@ sub process_http {
     close $IN;
     close $OUT;
     close $ERR if $ERR;
+
+    return $resp;
 }
 
 sub process_file {
@@ -2071,6 +2077,22 @@ sub hexdump {
         $addr += length($s);
     }
     return @out;
+}
+
+sub humanize_bytes {
+    my $len = shift;
+    my $r;
+    
+    if ($len >= 2 ** 30){
+        $r = sprintf("%.1f GiB", $len / 2 ** 30);
+    } elsif ($len >= 2 ** 20){
+        $r = sprintf("%.1f MiB", $len / 2 ** 20);
+    } elsif ($len >= 2 ** 10){
+        $r = sprintf("%.1f KiB", $len / 2 ** 10);
+    } else {
+        $r = $len;
+    }
+    return $r;
 }
 
 BEGIN {
