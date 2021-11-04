@@ -439,7 +439,7 @@ sub process_http {
             } else {
                 $fname = urldecode($1);
             }
-            $fname = substr($fname, 1); # drop initial /
+            $fname = substr($fname, 1) if $fname =~ m{^/}; # drop initial /
         } elsif ($url_final->{path} =~ m{/$}){
             $fname = $url_final->{path} . ${index_name};
             $fname = substr($fname, 1); # drop initial /
@@ -452,34 +452,40 @@ sub process_http {
     }
     if ($fname){
         # process cut-dirs
-        if ($args{recursive} && $args{'cut-dirs'}){
-            # split the path segments
-            my @path = split(m{/}, $fname);
-            my $f = pop @path;  # keep the file
-            # remove the required number of elements
-            if ($args{'recursive-flat'}){
-                @path = ();
-            } else {
-                for (my $i=1; $i <= $args{'cut-dirs'}; $i++){
-                    shift @path;
+        if ($args{recursive}){
+            if ($args{'cut-dirs'}){
+                # split the path segments
+                my @path = split(m{/}, $fname);
+                my $f = pop @path;  # keep the file
+                # remove the required number of elements
+                if ($args{'recursive-flat'}){
+                    @path = ();
+                } else {
+                    for (my $i=1; $i <= $args{'cut-dirs'}; $i++){
+                        shift @path;
+                    }
+                }
+                if (@path){
+                    $fname = join('/', @path) . "/$f";
+                } else {
+                    $fname = $f;
                 }
             }
-            if (@path){
-                $fname = join('/', @path) . "/$f";
-            } else {
-                $fname = $f;
+            my $h = '';
+            unless ($args{'no-host-directories'}){
+                $h = $url_final->{host};
+                if ($url_final->{port} != $defports{$url_final->{scheme}}){
+                    $h .= ':' . $url_final->{port};
+                }
+                $h .= '/';
             }
+            make_path("${prefix}${h}${fname}");
+            redirect_output_to_file("${prefix}${h}${fname}");
+        } else {
+            # not recursive
+            redirect_output_to_file("${prefix}${fname}");
         }
-        my $h = '';
-        unless ($args{'no-host-directories'}){
-            $h = $url_final->{host};
-            if ($url_final->{port} != $defports{$url_final->{scheme}}){
-                $h .= ':' . $url_final->{port};
-            }
-            $h .= '/';
-        }
-        make_path("${prefix}${h}${fname}");
-        redirect_output_to_file("${prefix}${h}${fname}");
+
     }
     
     do {
