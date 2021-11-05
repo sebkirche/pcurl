@@ -994,7 +994,7 @@ sub process_http_response {
                           }
                       }                            
                   }
-                } # end of headers processing
+                } # end of headers processing --------------------------------------------
 
                 # avoid unwanted binary output
                 $content_length = $headers{'content-length'};
@@ -1154,7 +1154,7 @@ sub parse_cookie_header {
       )
       
       (?<COOKIE>
-       (?{ [ $^R, {} ] }) # initialize an href for the content of the cookie
+       (?{ [ $^R, {} ] }) # initialize an hashref for the content of the cookie
        # at least we have a key=value
        (?&KV)             (?{ [ $^R->[0][0], { %{ $^R->[0][1] }, name=>$^R->[1], value=>$^R->[2] } ] })
        ( ; \s    # but we can have additional attributes
@@ -1343,7 +1343,11 @@ sub perform_action {
             say STDOUT $&;
         }
     } elsif ($action->{what} eq 'listlinks'){
-        my @links = ${$resp->{captured}} =~ /<a.*href="([^"]+)"/g;
+        unless ($resp->{captured} && ${$resp->{captured}}){
+            say STDERR "* Error??!: no data captured to perform action " . $action->{what};
+            return;
+        }
+        my @links = ${$resp->{captured}} =~ /<a[^>]+href="([^"]+)"/g;
         if ($action->{value}){
             say STDOUT $_ for grep { m|$action->{value}| } @links;
         } else {
