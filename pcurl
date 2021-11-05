@@ -1344,7 +1344,7 @@ sub perform_action {
         }
     } elsif ($action->{what} eq 'listlinks'){
         unless ($resp->{captured} && ${$resp->{captured}}){
-            say STDERR "* Error??!: no data captured to perform action " . $action->{what};
+            # say STDERR "* Error??!: no data captured to perform action " . $action->{what};
             return;
         }
         my @links = ${$resp->{captured}} =~ /<a[^>]+href="([^"]+)"/g;
