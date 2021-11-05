@@ -544,7 +544,7 @@ sub process_http {
                 # relative redirect urls may miss some parameters
                 $url_final->{scheme} = $old_scheme unless $url_final->{scheme};
                 $url_final->{host} = $old_host unless $url_final->{host};
-                $url_final->{port} = $old_port unless $url_final->{port};
+                $url_final->{port} = $defports{$url_final->{scheme}} || $old_port unless $url_final->{port};
                 # compare new url with previous and reconnected if needed
                 if (($url_final->{scheme} ne $old_scheme) || ($url_final->{host} ne $old_host) || ($url_final->{port} != $old_port)){
                     say STDERR "* Closing connection because of scheme/server redirect" if $args{verbose} || $args{debug};
