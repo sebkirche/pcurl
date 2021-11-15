@@ -525,7 +525,7 @@ sub process_http {
         my $need_capture = defined $process_action && !$process_action->{done}; # && $process_action->{action} eq 'grep';
 
         # Receive the response
-        $resp = process_http_response($IN, $ERR, $url_final, $url_proxy, $need_capture, $following);
+        $resp = process_http_response($IN, $ERR, $url_final, $url_proxy, $need_capture, $fname, $following);
         say STDERR Dumper $resp->{headers} if $args{debug};
         say STDERR "* received $resp->{byte_len} bytes" if $args{verbose} || $args{debug};
         if ($resp->{byte_len}){
@@ -894,7 +894,7 @@ sub build_http_proxy_headers {
 # - byte_len: the size of the response
 # - captured: when performing actions, store the response content in this key
 sub process_http_response {
-    my ($IN, $ERR, $url_final, $url_proxy, $need_capture, $following) = @_;
+    my ($IN, $ERR, $url_final, $url_proxy, $need_capture, $output_name, $following) = @_;
     my $headers_done = 0;       # flag to know if we are processing headers or body
     my $status_done = 0;        # flag to know if we have processed the status
     my $received = 0;           # counter for total bytes received
@@ -1053,6 +1053,8 @@ NO_BIN
                     say STDERR "* Unknown size of response to read" if $args{debug};
                 }
                 say STDERR "* Reading using chunked mode" if $chunked_mode && $args{debug};
+                # print STDERR sprintf("%s: ", $output_name || $fname) if defined($content_length) && $args{progression} && !$args{debug};
+                my $prog = 0;   # accumulator for progression
                 my $chunk_len;
               CHUNK:
                 while (! $fh->eof){ # loop on the remaining of response
@@ -1068,6 +1070,14 @@ NO_BIN
                     if ($buf_size){
                         my $block = $fh->read(my $buf, $buf_size);
                         if ($block){
+                            if (defined($content_length) && $args{progression} && !$args{debug}){
+                                my $BAR_LENGTH = 72;
+                                $prog += $block;
+                                my $pchars = $BAR_LENGTH / $content_length * $prog;
+                                my $pct = 100 / $content_length * $prog;
+                                print STDERR sprintf("\r%s: %s%s %.1f%%", $output_name || $fname, '#' x int($pchars), '.' x ($BAR_LENGTH - int($pchars)), $pct);
+                                flush STDERR;
+                            }
                             say STDERR "* Read $block bytes" if $args{debug};
                             $received += $block;
                             print STDOUT $buf unless ($is_redirected && $args{location});
@@ -1078,6 +1088,8 @@ NO_BIN
                     }
                 }
                 # there may have additional info... (body > Content-Length)
+
+                print STDERR "\n" if defined($content_length) && $args{progression} && !$args{debug};
             };
             
             if (eof($fh)){
