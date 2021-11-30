@@ -73,6 +73,7 @@ my %rel_url_to_local_dir;
 my @getopt_defs = (
     'accept=s',
     'action=s',
+    'action-nullable-values',
     'basic|user=s',
     'content=s',
     'cookie|b=s',
@@ -1379,7 +1380,7 @@ sub json_action {
         # say Dumper $js;
         my $jp = $action->{value};
         my $jval = get_jpath($hash, $jp) // '<null>'; # if undef value, stringify to avoid message
-        say STDOUT $jval; 
+        say STDOUT to_json($jval); 
     } else {
         say STDERR "Request did not returned a valid JSON for an action.";
         exit 8;
@@ -1821,29 +1822,41 @@ sub get_jpath {
     print STDERR "Path: " . join(' / ', @$path) . "\n" if $args{debug};
     my $p = shift @$path || ''; # next element to get from path
     my $v;                      # placeholder for data
-    if ($p =~ /(.+)(\[[^]]?\])$/){
+    if ($p =~ /(.+)(\[[^]]*\])$/){
         # support foo[] and foo/[] in the path
         $p = $1;
         unshift @$path, $2;
     }        
     if (ref $ref eq 'ARRAY'){
-        if ($p =~ /^\[(\d*)\]$/){ # we try to access by index
-            my $index = eval $1;
-            die "eval issue of `$1`: ".$@ if $@;
-            if (defined $index && $index ne ''){
-                die sprintf("Index '%s' is greater than max index of array (%d) in path '%s'", $p, scalar(@$ref)-1, $fullpath) if $index >= scalar @$ref;
-                $v = @{$ref}[$index];
-                return get_jpath($v, $path, $fullpath) if @$path;
+        if ($p =~ /^\[([^)]*)\]$/){ # we try to access an index ?
+            my @indexes;
+            my $idx = $1;
+            if ($idx eq '*' || $idx eq ''){
+                # array[] or array[*]
+                @indexes = 0 .. $#{ $ref };
+            } elsif ($idx =~ /^\d+(,\d+)*$/ ) {
+                # array[1] or array[1,2,3]
+                @indexes = split /,/, $&;
+            } elsif ($idx =~ /^(\d+)\s*\.\.\s*(\d+)$/){
+                # array[2 .. 12]
+                @indexes = $1 .. $2;
             } else {
-                   # for empty squared brackets, return whole array or process function
+                die "Invalid index $idx in path $path";
+            }
+            if (scalar @indexes > 1){
+                $v = [ map { jpath_array_accessor($ref, $_, $path, $fullpath) } @indexes ];
+            } elsif (scalar @indexes == 1){
+                $v = jpath_array_accessor($ref, $indexes[0], $path, $fullpath);
+            } else {
                 if (@$path){
                     return get_jpath($ref, $path, $fullpath);
                 } else {
                     $v = $ref;
                 }
             }
-        } elsif ($p eq 'length()'){
-            return scalar @$ref; # pseudo function for size of array
+            
+        } elsif ($p =~ /^(\w+)\(\)$/){
+            return jpath_function($1, $ref);
         } else {
             die "Array is not accessible with '$p' in path '$fullpath'" if $p; # non-numeric index
             # return t
@@ -1855,29 +1868,59 @@ sub get_jpath {
             if (exists $ref->{$p}){
                 $v = $ref->{$p};
                 return get_jpath($v, $path, $fullpath) if @$path;
-            } elsif ($p eq 'length()'){
-                return scalar keys %$ref; # pseudo function for number of keys in object
+            } elsif ($p =~ /^(\w+)\(\)$/){
+                return jpath_function($1, $ref);
+            } elsif ($p =~ /^\[([^)]*)\]$/){
+                die "Element of path is object, not array";
             } else {
-                die Dumper($ref) . "object does not contain '$p' in path '$fullpath'";
-            }            
+                if ($args{'action-nullable-values'}){
+                    return undef;
+                } else {
+                    die Dumper($ref) . "object does not contain '$p' in path '$fullpath'";
+                }
+            }
         } else {
             # no more path, return the object
             $v = $ref;
         }
     }
-    if (ref $v){
-        return to_json($v);     # we are pointing to a complex value, jsonify it
-    } else {
-        return $v;              # return the single value
+    return $v;
+}
+
+sub jpath_array_accessor {
+    my ($array, $index, $path, $fullpath) = @_;
+    say STDERR "Iterate index $index of array" if $args{debug};
+    die sprintf("Index %d is greater than max index of array (%d) in path '%s'", $index, $#{$array}, $fullpath) if $index >= scalar @$array;
+
+    my $elem = @{$array}[$index];
+    if (@$path){
+        my $path_copy = [ map { $_ } @$path ]; # deep copy of path
+        return get_jpath($elem, $path_copy, $fullpath);
     }
-}    
-    
+    return $elem;
+}
+
+sub jpath_function {
+    my ($func, $ref) = @_;
+    if ($func eq 'length'){     # pseudo function for size
+        if (ref $ref eq 'ARRAY'){
+            # array -> size of array
+            return scalar @$ref;
+        } elsif (ref $ref eq 'HASH'){
+            # hash -> numberof keys
+            return scalar keys %$ref;
+        }
+    } else {
+        die "Unknown function $func() in action";
+    }
+}
+
 sub process_stomp {
     my $url_final = shift;
     my ($IN, $OUT, $ERR, $host, $port, $resp);
 
     redirect_output_to_file($args{output});
-    
+
     ($OUT, $IN, $ERR) = connect_direct_socket($url_final->{host}, $url_final->{port});
 
     my ($user, $passwd) = ('guest', 'guest');
