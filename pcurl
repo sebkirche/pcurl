@@ -292,7 +292,7 @@ sub process_loop {
         $url->{scheme} = 'http' unless $url->{scheme};
         unless ($url->{port}){
             $url->{port} = $defports{$url->{scheme}};
-            unless ($url->{port}) {
+            if (!$url->{port} && $url->{scheme} ne 'file') {
                 say STDERR "* Default port unknown for scheme '$url->{scheme}'...";
                 exit 1;
             }
@@ -301,11 +301,11 @@ sub process_loop {
             $url->{path} = substr($url->{path}, 2);
         }
 
-        my $ustr = sprintf("%s://%s%s:%d%s",
+        my $ustr = sprintf("%s://%s%s%s%s",
                             $url->{scheme},
                             auth_string($url),
-                            $url->{host},
-                            $url->{port},
+                            $url->{host} || '',
+                            defined $url->{port} ? sprintf(':%d', $url->{port}) : '',
                             canonicalize($url->{path}));
         $processed_requests{$ustr}++;
         $asset_counter++;
