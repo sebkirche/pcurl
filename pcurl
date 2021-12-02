@@ -1380,7 +1380,7 @@ sub json_action {
         # say Dumper $js;
         my $jp = $action->{value};
         my $jval = get_jpath($hash, $jp) // '<null>'; # if undef value, stringify to avoid message
-        say STDOUT to_json($jval); 
+        say STDOUT (ref $jval ? to_json($jval) : $jval); 
     } else {
         say STDERR "Request did not returned a valid JSON for an action.";
         exit 8;
