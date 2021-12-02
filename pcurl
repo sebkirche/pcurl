@@ -103,7 +103,7 @@ my @getopt_defs = (
     'output|o=s',
     'parse-only',               # just show how we parse the URL
     'port|p=i',
-    'progression',
+    'progression|progress',
     'proxy-user|U=s',
     'proxy10=s',
     'proxy|x=s',
