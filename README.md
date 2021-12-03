@@ -203,6 +203,72 @@ Options
     -V, --version
         Show version number and quit.
 
+Web crawling features:
+
+    In web-crawling mode, a first resource is retrieved then in a recursive
+    way, all related resources (linked html, pictures, css) are also
+    retrieved.
+
+    By default a number of 5 successive jumps from initial url are
+    processed. All the files are stored under a common directory named after
+    the host.
+
+    --accept-list <coma-separated list>
+        Specify a list of accepted file extensions
+
+    --accept-regex <pattern>
+        Specify a pattern that will be validated to accept urls
+
+    --cut-dirs <number of levels>
+        Specify a number of path levels to remove from all links.
+
+    --directory-prefix <common path>
+        Specify a path to prepend for all retrieved resources.
+
+    --default-page <file name>
+        Specify the name of the index file when directory browsing is
+        allowed by the server. Default is 'index.html'
+
+    -l, --level <number>
+        Specify the maximum number of jump to explore from initial url.
+        Default is 5. 0 is equivalent to 'get all site'.
+
+    --no-host-directories
+        Allow to disable the creation of a common ancestor named after the
+        host name for all retrieved resources.
+
+    --np, --no-parent
+        Prevent the crawling to go back to the parent of the given url.
+
+    --page-requisites
+        Will help to get linked resources (pictures, css) even if stored in
+        a higher directory than resource.
+
+    -r, --recursive
+        Use the web-crawling mode: get as many linked resources as possible.
+
+    --recursive-flat
+        Disable the creation of directories, all related resources will be
+        stored in the same directory.
+
+    --relative
+        Tell that you want to take into account only relative links.
+
+    --reject-list <coma-separated list>
+        Specify a list of ignored file extensions
+
+    --reject-regex <pattern>
+        Specify a pattern that will be validated to ignore urls
+
+    --span-hosts
+        Allow to process resources from external web sites. Beware if you
+        set also --level 0: you will download the whole Internet! ;o)
+
+    --summary
+        Ask for a final list of retrieved resources, if you do not want to
+        see other details.
+
+
 Actions
 -------
 
