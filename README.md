@@ -203,6 +203,16 @@ Options
     -V, --version
         Show version number and quit.
 
+    --xml-pp
+        When using an xml action (see --action), pretty-print the xml.
+        Default is not indented.
+
+    --xml-pp-indent <number_of_spaces>
+        Number of space characters for each indentation level. Default is 2
+
+    --xml-root-element <name>
+        Use the given name for the root element of XML.
+
 Web crawling features:
 
     In web-crawling mode, a first resource is retrieved then in a recursive
@@ -276,12 +286,18 @@ To simplify some post-processing on the retrieved resources, you can specify an 
 Action can be of type:
 
 * print: display a response header value, a json or xml response attribute
+    * you can specify a pseudo path similar to xpath
+    * there is a limited set of functions that you can use as the last element of path:
+        * `length()` returns the number of element of an array, or the number of keys for a an object
+        * `to_json()` converts the result to JSON
+        * `to_xml()` converts the result to XML
     * `pcurl --action=header:server http://free.fr` => `nginx`
     * `pcurl https://jsonplaceholder.typicode.com/users/1 --action='json:id'` => `1`
     * `pcurl http://jsonplaceholder.typicode.com/users --action='json:[3]/address/geo'` => `{"lng":-164.299,"lat":29.4572}`
     * `pcurl http://jsonplaceholder.typicode.com/users --action='json:[3]/address/geo/lat'` => `29.4572`
     * `pcurl https://www.w3schools.com/xml/simple.xml --action 'xml:breakfast_menu/food/length()' => `5`
     * note: `foo/[42]` is equivalent to `foo[42]`
+    
 
 * regex: display the match of a regex on the response body
     * `pcurl http://jsonplaceholder.typicode.com/ --action='bodyrx:Free.*\.'` => `Free fake API for testing and prototyping.`

@@ -120,6 +120,10 @@ my @getopt_defs = (
     'user-agent|A=s',
     'verbose|v',
     'version|V',                # comment this out to have the built-in version handler that shows program/Getopt/Perl versions
+    # 'xml-decl=s',
+    'xml-pp',
+    'xml-pp-indent=i',
+    'xml-root-element=s',
     # recursive options -------------------------------
     'accept-list=s',            # a coma-separated list
     'accept-regex=s',
@@ -151,7 +155,13 @@ if ($Getopt::Long::VERSION >= '2.39') { # Getopt::Long does not support alias wi
           'http11');
 }
 
-my %args = ( 'tcp-nodelay' => 1, 'data-urlencode' => [], header => [], 'json-pp-indent' => 2 );
+my %args = ( 'tcp-nodelay' => 1,
+             'data-urlencode' => [],
+             header => [],
+             'json-pp-indent' => 2,
+             'xml-pp-indent' => 2,
+             'xml-root-element' => 'root'
+    );
 
 GetOptions(\%args, @getopt_defs ) or pod2usage(-exitval => 2, -verbose => 0);
 pod2usage(-exitval => 0, -verbose => 1) if $args{help};
@@ -1389,13 +1399,16 @@ sub json_action {
 
 sub xml_action {
     my ($action, $url, $resp) = @_;
-        my $treepp = XML::TreePP->new();
+    my $treepp = XML::TreePP->new(
+        xml_decl => '',
+        pretty_print => $args{'xml-pp'}
+        );
         my $hash = $treepp->parse(${$resp->{captured}});
         if ($hash){
             # say Dumper $js;
             my $jp = $action->{value};
             my $jval = get_jpath($hash, $jp);
-            say STDOUT $jval;
+            say STDOUT (ref $jval ? xmlify($jval, $treepp) : $jval);
         } else {
             say STDERR "Request did not returned a valid XML for an action.";
             exit 9;
@@ -1910,8 +1923,34 @@ sub jpath_function {
             # hash -> numberof keys
             return scalar keys %$ref;
         }
+    } elsif ($func eq 'to_json'){
+        return to_json($ref);
+    } elsif ($func eq 'to_xml'){
+        return xmlify($ref);
     } else {
         die "Unknown function $func() in action";
+    }
+}
+
+sub xmlify {
+    my ($val, $treepp) = @_;
+    $treepp = XML::TreePP->new(
+        xml_decl => '',
+        pretty_print => $args{'xml-pp'}
+        ) unless $treepp;
+    if ($args{'xml-pp'}) {
+        $treepp->set( indent => $args{'xml-pp-indent'} );
+    }
+    # say ref $val;
+    # say Dumper $val;
+    if (!ref $val || (ref $val eq 'HASH' && scalar keys %$val == 1)){
+        return $treepp->write( $val );
+    } else {
+        if (ref $val eq 'ARRAY'){
+            return $treepp->write( { $args{'xml-root-element'} => { item => $val } } );
+        } else {
+            return $treepp->write( { $args{'xml-root-element'} => $val } );
+        }
     }
 }
 
@@ -2613,7 +2652,11 @@ sub hash_to_xml {
             my $val = $hash->{$key};
             if ( !defined $val ) {
                 next if ($key eq $textnk);
-                push( @$out, "<$key />" );
+                if ($self->{pretty_print}){
+                    push( @$out, "<$key />" );
+                } else {
+                    push( @$out, "<$key/>" );
+                }
             }
             elsif ( UNIVERSAL::isa( $val, 'HASH' ) ) {
                 my $child = $self->hash_to_xml( $key, $val );
@@ -2648,16 +2691,28 @@ sub hash_to_xml {
         if ( defined $self->{__indent} ) {
             s/^(\s*<)/$self->{__indent}$1/mg foreach @$out;
         }
-        unshift( @$out, "\n" );
     }
 
-    my $text = join( '', @$out );
+    my $text;
+    if ($self->{pretty_print}){
+        $text = join( "\n", @$out );
+    } else {
+        $text = join( '', @$out );
+    }
     if ( defined $name ) {
         if ( scalar @$out ) {
-            $text = "<$name$jattr>$text</$name>\n";
+            if ($self->{pretty_print}){
+                $text = "<$name$jattr>\n$text\n</$name>";
+            } else {
+                $text = "<$name$jattr>$text</$name>";
+            }
         }
         else {
-            $text = "<$name$jattr />\n";
+            if ($self->{pretty_print}){
+                $text = "<$name$jattr />";
+            } else {
+                $text = "<$name$jattr/>";
+            }
         }
     }
     $text;
@@ -2670,7 +2725,11 @@ sub array_to_xml {
     my $out   = [];
     foreach my $val (@$array) {
         if ( !defined $val ) {
-            push( @$out, "<$name />\n" );
+            if ($self->{pretty_print}){
+                push( @$out, "<$name />" );
+            } else {
+                push( @$out, "<$name/>" );
+            }
         }
         elsif ( UNIVERSAL::isa( $val, 'HASH' ) ) {
             my $child = $self->hash_to_xml( $name, $val );
@@ -2692,7 +2751,12 @@ sub array_to_xml {
         }
     }
 
-    my $text = join( '', @$out );
+    my $text;
+    if ($self->{pretty_print}){
+        $text = join( "\n", @$out );
+    } else {
+        $text = join( '', @$out );
+    }
     $text;
 }
 
@@ -2703,7 +2767,7 @@ sub scalaref_to_cdata {
     my $data = defined $$ref ? $$ref : '';
     $data =~ s#(]])(>)#$1]]><![CDATA[$2#g;
     my $text = '<![CDATA[' . $data . ']]>';
-    $text = "<$name>$text</$name>\n" if ( $name ne $self->{text_node_key} );
+    $text = "<$name>$text</$name>" if ( $name ne $self->{text_node_key} );
     $text;
 }
 
@@ -2713,7 +2777,7 @@ sub scalar_to_xml {
     my $scalar = shift;
     my $copy   = $scalar;
     my $text   = &xml_escape($copy);
-    $text = "<$name>$text</$name>\n" if ( $name ne $self->{text_node_key} );
+    $text = "<$name>$text</$name>" if ( $name ne $self->{text_node_key} );
     $text;
 }
 
@@ -3144,6 +3208,18 @@ Show both headers during the communication.
 =item -V, --version
 
 Show version number and quit.
+
+=item --xml-pp
+
+When using an xml action (see --action), pretty-print the xml. Default is not indented.
+
+=item --xml-pp-indent <number_of_spaces>
+
+Number of space characters for each indentation level. Default is 2
+
+=item --xml-root-element <name>
+
+Use the given name for the root element of XML.
 
 =back
 
