@@ -1452,8 +1452,15 @@ sub discover_links {
     my @discovered_urls;
     my %dups;
     for my $r (@reqs){          # rebuild the list of urls from the anchors
+
+        # fix weird URLs from monsite-orange.fr: missing scheme ??!
+        if ($r !~ m{https?://} && index($r, '//') == 0){
+            $r = $url->{scheme} . ':' . $r;
+        }
+        
         next if $dups{$r};      # avoid multiple downloads
         next if $r =~ /^mailto:/;
+
         $dups{$r}++;
         my $local_dest = '';
         if ($r =~ /^https?:/){
