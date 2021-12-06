@@ -95,7 +95,7 @@ my @getopt_defs = (
     'json-pp-indent=i',
     'json-stringify-null',
     'junk-session-cookies',
-    'location|L',
+    'location|follow|L',
     'man',
     'max-wait=i',
     'max-redirs=i',
@@ -3128,7 +3128,7 @@ When parsing json, replace null values by the string 'null'
 
 When using -b, --cookie and loading cookies from file, purge the session cookies (those with no expire date).
 
-=item -L, --location
+=item -L, --location, --follow
 
 Follow HTTP redirects.
 

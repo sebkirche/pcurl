@@ -127,7 +127,7 @@ Options
         When using -b, --cookie and loading cookies from file, purge the
         session cookies (those with no expire date).
 
-    -L, --location
+    -L, --location, --follow
         Follow HTTP redirects.
 
     --man
