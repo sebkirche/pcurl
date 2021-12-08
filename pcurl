@@ -1504,12 +1504,13 @@ sub discover_links {
             }
                 
             $p = $canon;
-            my $auth = auth_string($url);
-            my $u = sprintf("%s://%s%s:%d%s",
+            my $user_info = auth_string($url);
+            my $authority = $url->{host};
+            $authority = $user_info . $authority if $user_info;
+            $authority .= sprintf(":%s", $url->{port}) if $url->{port} != $defports{$url->{scheme}};
+            my $u = sprintf("%s://%s%s",
                             $url->{scheme},
-                            $auth,
-                            $url->{host},
-                            $url->{port},
+                            $authority,
                             $p);
             $rel_url_to_local_dir{$u} = $local_dest if $local_dest; # store the local relative path
             unless(exists $processed_requests{$u}){
