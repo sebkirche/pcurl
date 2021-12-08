@@ -278,21 +278,14 @@ sub process_loop {
     while (@$request_list){
 
         my $u = shift @$request_list;
-        my $url = parse_url($u);
+        my $url = parse_uri($u);
         unless ($url){
             say STDERR "It's strange to me that `$u` does not look like an url...";
             exit 1;
         }
         if ($args{'parse-only'}){
             if ($url){
-                for my $k (sort grep { $url->{$_} } keys %$url){
-                    if (ref $url->{$k} eq 'HASH'){
-                        my $h = $url->{$k};
-                        say(STDOUT "$k:$_ = $h->{$_}") for sort keys %$h;
-                    } else {
-                        say STDOUT "$k = $url->{$k}";
-                    }
-                }
+                dump_url($url);
                 exit 0;
             } else {
                 exit 1;
@@ -551,7 +544,7 @@ sub process_http {
                 $following++;
                 $args{referer} = $url_final->{url} if $auto_ref;      # use previous url as next referer
                 my ($old_scheme, $old_host, $old_port) = ($url_final->{scheme}, $url_final->{host}, $url_final->{port});
-                $url_final = parse_url($resp->{headers}{location}); # get redirected url
+                $url_final = parse_uri($resp->{headers}{location}); # get redirected url
                 # relative redirect urls may miss some parameters
                 $url_final->{scheme} = $old_scheme unless $url_final->{scheme};
                 $url_final->{host} = $old_host unless $url_final->{host};
@@ -712,7 +705,7 @@ sub get_proxy_settings {
     }
     return undef unless $proxy_set;
     
-    $proxy = parse_url($proxy_set);
+    $proxy = parse_uri($proxy_set);
     unless ($proxy){
         say STDERR "It's strange to me that `$proxy_set` does not look as an url for proxy...";
         exit 4;
@@ -736,7 +729,7 @@ sub build_http_request_headers {
         if ($u->{proxified}){
             push @$headers, "${method} $u->{url} HTTP/${http_vers}"; # via a proxy, request full url
         } else {
-            my $path = $u->{path} . ($u->{params} ? "?$u->{params}" : '');
+            my $path = $u->{path} . ($u->{query} ? "?$u->{query}" : '');
             push @$headers, "${method} ${path} HTTP/${http_vers}"; # else request only the path
         }
 
@@ -1370,12 +1363,8 @@ sub perform_action {
             # say STDERR "* Error??!: no data captured to perform action " . $action->{what};
             return;
         }
-        my @links = ${$resp->{captured}} =~ /<a[^>]+href="([^"]+)"/g;
-        if ($action->{value}){
-            say STDOUT $_ for grep { m|$action->{value}| } @links;
-        } else {
-            say STDOUT $_ for @links;
-        }
+        my @url = discover_links($resp, $url, undef, undef, 0);
+        say STDOUT $_ for @url;
     } elsif (index($action->{what}, 'getlinked') == 0 && !$action->{done}){
         my @refs = getlinked_action($action, $url, $resp);
         push @$discovered_links, @refs;
@@ -1459,13 +1448,13 @@ sub discover_links {
         }
         
         next if $dups{$r};      # avoid multiple downloads
-        next if $r =~ /^mailto:/;
+        next if $r =~ /^mailto:/; # avoid mail links
 
         $dups{$r}++;
         my $local_dest = '';
         if ($r =~ /^https?:/){
             # arbitrary fully qualified url
-            my $linked = parse_url($r);
+            my $linked = parse_uri($r);
             if (!$linked->{host}
                 || $linked->{host} eq $url->{host}
                 || $args{'span-hosts'}){
@@ -2039,48 +2028,86 @@ sub process_stomp_response {
 # Extract the differents parts from an URL
 # return a hashref or undef if it fails
 # this uses a extended regex as a recursive descent parser    
-sub parse_url {
+sub parse_uri {
     my $given = shift;
-    unless( $given =~ qr{
-        (?: (?<SCHEME> [A-Za-z0-9+.-]+ ) :// )?
-        (?: 
-          (?: (?<AUTH> (?<USER> (?&UNRESERVED)+) (?: : (?<PWD>[^@]+) )? ) @ )?
-          (?<HOST> [^-/] (?&UNRESERVED)+ )
-          (?: : (?<PORT> \d+ ))?
-        )?
-        (?<PATH> / (?&PCHAR)* ( / (?&PCHAR)* )* )?
-        (?: \? (?<PARAMS> (?&PCHAR)* ))?
-      
-        (?(DEFINE) #from here, define some sub-parts
-          (?<PCHAR> (?&UNRESERVED) | (?&PCTENCODED) | (?&SUBDEL) | : | @ )
-          (?<PCTENCODED> % (?&HEXDIG) (?&HEXDIG) )
-          (?<HEXDIG> [0-9A-Za-z] )
-          (?<UNRESERVED> [A-Za-z0-9._~-] )
-          #(?<RESERVED> (?&GENDEL) | (?&SUBDEL) ) # reserved
-          #(?<GENDEL> [:/?\#\[\]@] )
-          (?<SUBDEL> [!\$&'()\*\+,;=\.] )
+    unless( $given =~ qr{^
+        # See RFC3986 - URI Generic Syntax
+
+        (?: (?<SCHEME> (?&SCHEME_ELEMS)) : )
+        (?:  # HIERARCHICAL PART
+          (?: # AUTHORITY                # authority begins with '//'
+            (?: / /
+              (?<USERINFO>
+                (?<USER> (?&UNRESERVED)+)? (?: : (?<PWD>[^@]+) )? @ 
+              )?
+              (?<HOST> [^-/] (?&UNRESERVED)+ )
+              (?: : (?<PORT> \d+ ))?
+            )
+            (?<PATH1> (?: / (?&PCHAR)* )*              ) # begins with '/' or is empty
+          )
+          | (?<PATH2> / (?&PCHAR)+ (?: / (?&PCHAR)* )* ) # begins with '/' but not '//'
+          | (?<PATH3> (?&PATH_NOSCHEME)                ) # begins with a non-colon segment
+          | (?<PATH4> (?&PATH_ROOTLESS)                ) # begins with a segment
+          | (?<PATH5>                                  ) # zero characters
         )
-            }x ){
+        (?: \? (?<QUERY>    ( (?&PCHAR) | / | \? )* ) )?
+        (?: \# (?<FRAGMENT> ( (?&PCHAR) | / | \? )* ) )?
+
+        (?(DEFINE) # from here, define some callable sub-parts
+                   # note that named capturing groups cannot be accessed via $+{} after match
+
+          (?<SCHEME_ELEMS>  [A-Za-z0-9] [A-Za-z0-9+.-]*                          )
+          #(?<PATH_ABEMPTY>  / (?&SEGMENT)                                       )
+          #(?<PATH_ABSOLUTE> / (?&SEGMENT_NZ) (?: / (?&SEGMENT))*                )
+          (?<PATH_NOSCHEME> (?&SEGMENT_NZ_NC)+ (?: / (?&SEGMENT))*               )
+          (?<PATH_ROOTLESS> (?&SEGMENT_NZ) (?: / (?&SEGMENT))*                   )
+          (?<PATH_EMPTY>                                                         ) # empty rule
+          (?<SEGMENT>       (?&PCHAR)*                                           )
+          (?<SEGMENT_NZ>    (?&PCHAR)+                                           )
+          (?<SEGMENT_NZ_NC> (?&UNRESERVED) | (?&PCTENCODED) | (?&SUBDEL) | @     )
+          (?<PCHAR>         (?&UNRESERVED) | (?&PCTENCODED) | (?&SUBDEL) | : | @ )
+          (?<PCTENCODED>    % (?&HEXDIG) (?&HEXDIG)                              ) # Percent encoded
+          (?<HEXDIG>        [0-9A-Za-z]                                          ) # hexadecimal digit
+          (?<UNRESERVED>    [A-Za-z0-9._~-]                                      )
+          #(?<RESERVED>     (?&GENDEL) | (?&SUBDEL)                              ) # reserved
+          #(?<GENDEL>       [:/?\#\[\]@]                                         ) # generic delimiters
+          (?<SUBDEL>        [!\$&'()\*\+,;=\.]                                   ) # subcomponent delimiters
+        )
+            $}x ){
         return undef;
     }
     my $url = {};
     $url->{url} = $given;
     $url->{scheme} = $+{SCHEME};
-    if ($+{AUTH}){
+    if ($+{USERINFO}){
         $url->{auth} = {
             user => $+{USER},
             $+{PWD} ? (password => $+{PWD}) : ()
         };
     }
-    $url->{host} = $+{HOST};
-    $url->{port} = $args{port} || $+{PORT}; # if port given in parameter, override url port
-    $url->{path} = $+{PATH} || '/';
-    $url->{params} = $+{PARAMS};
+    $url->{host}     = $+{HOST};
+    $url->{port}     = $args{port} || $+{PORT}; # if port given in parameter, override url port
+    $url->{path}     = $+{PATH1} // $+{PATH2} // $+{PATH3} // $+{PATH4} // $+{PATH5} ;#|| '/';
+    $url->{query}    = $+{QUERY};
+    $url->{fragment} = $+{FRAGMENT};
     if ($args{debug}){
         say STDERR "* Parsed URL '$given'";
         say(STDERR "*  $_ = " . (defined $url->{$_} ? $url->{$_} : "undef")) for(sort(keys %$url));
     }
     return $url;
+}
+
+# dump of URL parts
+sub dump_url {
+    my $url = shift;
+    for my $k (sort grep { defined $url->{$_} } keys %$url){
+        if (ref $url->{$k} eq 'HASH'){
+            my $h = $url->{$k};
+            say STDOUT "$k:$_ = $h->{$_}" for sort keys %$h;
+        } else {
+            say STDOUT "$k = $url->{$k}";
+        }
+    }
 }
 
 # make local directory tree
@@ -3299,6 +3326,16 @@ Allow to process resources from external web sites. Beware if you set also --lev
 =item --summary
 
 Ask for a final list of retrieved resources, if you do not want to see other details.
+
+=head2 Examples
+
+=item parse an URI to show its components
+
+    pcurl https://mylogin:mypwd@subdomain.domain.com:1234/some/path/to/resource
+
+=item list linked resources on a page
+
+    pcurl https:///page-6044ea02b75b0.html --action listlinks:
 
 =cut
 
