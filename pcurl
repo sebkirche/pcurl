@@ -535,7 +535,7 @@ sub process_http {
         if ($resp->{byte_len}){
             my $code = $resp->{status}{code};
             say STDERR '* ' . $url_final->{url} . ' -> ' . $code if $args{verbose} || $args{debug};
-            if ($args{location} && (300 <= $code) && ($code <= 399)){
+            if ($args{location} && (300 < $code) && ($code <= 399)){
                 # if the result is a redirect, follow it
                 unless($redirs){
                     say STDERR sprintf("* Maximum (%d) redirects followed", $max_redirs);
@@ -558,6 +558,9 @@ sub process_http {
                 }
                 say STDERR sprintf("* Redirecting #%d to %s", $max_redirs - $redirs,  $url_final->{url}) if $args{verbose} || $args{debug};
                 $redirs--;
+            } elsif ($code == 300){
+                say STDERR "* 300 'Multiple Choices' on $url_final->{url}";
+                goto BREAK;
             } elsif ($code == 404){
                 say STDERR "* 404 on $url_final->{url}";
                 goto BREAK;
