@@ -24,7 +24,7 @@ use Socket qw(IPPROTO_TCP TCP_NODELAY);
 use Time::Local;
 # use Carp::Always;
 
-our $VERSION = '0.9.2';
+our $VERSION = '0.9.3';
 $|++; # auto flush messages
 
 $Data::Dumper::Sortkeys = 1;
@@ -91,6 +91,8 @@ my @getopt_defs = (
     'include-response|include|i',
     'include-request',
     'insecure|k',
+    # 'ipv4|4',                   # TODO
+    # 'ipv6|6',                   # TODO
     'json-pp',
     'json-pp-indent=i',
     'json-stringify-null',
@@ -113,9 +115,14 @@ my @getopt_defs = (
     'referer|e=s',
     'request|X=s',
     'silent|s',
+    'sslv3|3',
     # 'stompdest=s',
     'stompmsg=s',
     'tcp-nodelay!',             # negatable: --notcp-nodelay
+    'tlsv1_0|tlsv1|1',
+    'tlsv1_1',
+    'tlsv1_2',
+    'tlsv1_3',
     'url=s',
     'user-agent|A=s',
     'verbose|v',
@@ -337,7 +344,7 @@ sub process_loop {
             #$url->{path} = '*' if $method eq 'OPTIONS';
             # say STDERR $url->{url} if $args{progression} || $args{verbose} || $args{debug};
             my $r = process_http($method, $url, ($level || (defined $args{level} && $args{level} == 0)) ? \@discovered_at_this_level : undef);
-            say STDERR sprintf("%s -> %s", $url->{url}, humanize_bytes($r->{byte_len})) if $args{progression} || $args{verbose} || $args{debug};
+            say STDERR sprintf("%s -> %s", $url->{url}, humanize_bytes($r->{byte_len})) if $r->{byte_len} && ($args{progression} || $args{verbose} || $args{debug});
             
         } elsif ($url->{scheme} =~ /^stomp/){
             unless ($url->{path} && $args{stompmsg}){
@@ -487,9 +494,15 @@ sub process_http {
         my $url_proxy = get_proxy_settings($url_final);
         my $pheaders = [];
         if ($url_proxy){
+            if ($url_final->{scheme} eq 'https' && $url_proxy->{auth}){
+                # try to get the openSSL version
+                my $ver = `openssl version` or die "Cannot get openssl version: $!";
+                chomp $ver;
+                say STDERR "* https tunelling via openSSL is unlikely to work unless openSSL is v3.0-beta1 (found $ver)!";
+            }
             $pheaders = build_http_proxy_headers($url_proxy, $url_final);
-            $url_final->{proxified} = 1 if $url_final->{scheme} eq 'http';
-            $url_final->{tunneled} = 1 if $url_final->{scheme} eq 'https';
+            $url_final->{proxified} = 1 if $url_final->{scheme} eq 'http'; # direct
+            $url_final->{tunneled} = 1 if $url_final->{scheme} eq 'https'; # openSSL
         }
 
         # connect directly a socket to the server or to a proxy
@@ -506,8 +519,15 @@ sub process_http {
 
         my $body = prepare_http_body_to_post();
         my $headers = build_http_request_headers($method, $url_final, $url_proxy, $body);
-        if ($url_final->{proxified} && $pheaders){
-            map { push @$headers, $_ } @$pheaders;
+        if ($url_final->{proxified} && @$pheaders){
+            # ask proxy to connect
+            send_http_request($IN, $OUT, $ERR, $pheaders, undef);
+            my $presp = process_http_response($IN, $ERR, $url_proxy, undef, undef, undef, undef, 1);
+            say STDERR "* Proxy returned " . $presp->{status}->{code} . " / " . $presp->{status}->{message} if $args{verbose} || $args{debug};
+            unless ($presp->{status}->{code} == 200){
+                say STDERR sprintf "Proxy connection unsuccessful: %d / %s", $presp->{status}->{code}, $presp->{status}->{message};
+                goto BREAK;
+            }
         }
 
         say STDERR "* Sending request to server" if $args{verbose} || $args{debug};
@@ -538,10 +558,15 @@ sub process_http {
                 # relative redirect urls may miss some parameters
                 $url_final->{scheme} = $old_scheme unless $url_final->{scheme};
                 $url_final->{host} = $old_host unless $url_final->{host};
-                $url_final->{port} = $old_port || $defports{$url_final->{scheme}} unless $url_final->{port};
+                unless ($url_final->{port}){
+                    $url_final->{port} = $defports{$url_final->{scheme}} || $old_port ;
+                }
                 # compare new url with previous and reconnected if needed
                 if (($url_final->{scheme} ne $old_scheme) || ($url_final->{host} ne $old_host) || ($url_final->{port} != $old_port)){
                     say STDERR "* Closing connection because of scheme/server redirect" if $args{verbose} || $args{debug};
+                    say STDERR sprintf("* scheme %s -> %s", $old_scheme, $url_final->{scheme}) if $url_final->{scheme} ne $old_scheme && $args{verbose} || $args{debug};
+                    say STDERR sprintf("* host %s -> %s", $old_host, $url_final->{host}) if $url_final->{host} ne $old_host && $args{verbose} || $args{debug};
+                    say STDERR sprintf("* port %s -> %s", $old_port, $url_final->{port}) if $url_final->{port} ne $old_port && $args{verbose} || $args{debug};
                     close $IN;
                     close $OUT;
                     close $ERR if $ERR;
@@ -642,11 +667,11 @@ sub process_file {
 sub send_http_request {
     my ($IN, $OUT, $ERR, $headers, $body) = @_;
     
-    push @$headers, '';         # empty line to terminate request
-    
     if ($args{verbose}){
         print STDERR "> $_\n" for @$headers;
     }
+    push @$headers, '';         # empty line to terminate request
+
     my $headers_txt = join "", map { "$_\r\n" } @$headers;
     print $OUT $headers_txt;    # send headers to server
     print STDOUT $headers_txt if $args{'include-request'};
@@ -784,7 +809,7 @@ sub build_http_request_headers {
         add_http_header($headers, \%custom, 'User-Agent', ${uagent});
         add_http_header($headers, \%custom, 'Accept', '*/*');
         add_http_header($headers, \%custom, 'Connection', 'close');
-        my $auth = $args{basic} || ($u->{auth} ? $u->{auth}{user} . ':' . $u->{auth}{password} : undef);
+        my $auth = $args{basic} || ($u->{auth} ? $u->{auth}->{user} . ':' . $u->{auth}->{password} : undef);
         add_http_header($headers, \%custom, 'Authorization', 'Basic ' . encode_base64($auth, '')) if $auth;
         # if ($u->{tunneled}){
             # my $auth = $args{'proxy-user'} || ($p->{auth} ? $p->{auth}{user} . ':' . $p->{auth}{password} : undef);
@@ -895,9 +920,12 @@ sub build_http_proxy_headers {
         } elsif (HTTP11()){
             push @$headers, "CONNECT $u->{host}:$u->{port} HTTP/1.1";
         }
+        push @$headers, "Host: $u->{host}:$u->{port}";
+        push @$headers, "User-Agent: ${uagent}";
     }
-    my $auth = $args{'proxy-user'} || ($p->{auth} ? $p->{auth}{user} . ':' . $p->{auth}{password} : undef);
-    push @$headers, 'Proxy-Authorization: Basic ' . encode_base64($auth) if $auth;
+    
+    my $auth = $args{'proxy-user'} || ($p->{auth} ? $p->{auth}->{user} . ':' . $p->{auth}->{password} : undef);
+    push @$headers, 'Proxy-Authorization: Basic ' . encode_base64($auth, '') if $auth;
     if (HTTP11()){
         # push @$headers, 'Proxy-Connection: close';
     }
@@ -911,7 +939,7 @@ sub build_http_proxy_headers {
 # - byte_len: the size of the response
 # - captured: when performing actions, store the response content in this key
 sub process_http_response {
-    my ($IN, $ERR, $url_final, $url_proxy, $need_capture, $output_name, $following) = @_;
+    my ($IN, $ERR, $url_final, $url_proxy, $need_capture, $output_name, $following, $only_body) = @_;
     my $headers_done = 0;       # flag to know if we are processing headers or body
     my $status_done = 0;        # flag to know if we have processed the status
     my $received = 0;           # counter for total bytes received
@@ -1012,7 +1040,8 @@ sub process_http_response {
                       }                            
                   }
                 } # end of headers processing --------------------------------------------
-
+                goto AFTER_BODY if $only_body;
+                
                 # avoid unwanted binary output
                 $content_length = $headers{'content-length'};
                 if ($headers{'content-type'}){
@@ -1115,6 +1144,8 @@ NO_BIN
             }
         }
     }
+  AFTER_BODY:
+    
     $resp{headers} = \%headers;
     $resp{byte_len} = $received; # keep the size of read data
     if ($need_capture){
@@ -2221,9 +2252,14 @@ sub connect_ssl_tunnel {
         $phost = $proxy->{host};
         $pport = $proxy->{port};
     }
-    my $cmd = "openssl s_client -connect ${host}:${port} -servername ${host} -quiet";# -quiet -verify_quiet -partial_chain';
+    my $cmd = "openssl s_client -connect ${host}:${port} -servername ${host} -quiet -4";# -quiet -verify_quiet -partial_chain';
     $cmd .= ' -no_check_time' if $args{insecure}; # useless?
     $cmd .= " -proxy ${phost}:${pport}" if $phost;
+    $cmd .= ' -ssl3' if $args{'sslv3'};
+    $cmd .= ' -tls1' if $args{'tlsv1_0'};
+    $cmd .= ' -tls1_1' if $args{'tlsv1_1'};
+    $cmd .= ' -tls1_2' if $args{'tlsv1_2'};
+    $cmd .= ' -tls1_3' if $args{'tlsv1_3'};
     $tunnel_pid = open3(*CMD_IN, *CMD_OUT, *CMD_ERR, $cmd);
     say STDERR "* connected via OpenSSL to $host:$port" if $args{verbose} || $args{debug};
     say STDERR "* command = $cmd" if $args{debug};
@@ -3247,9 +3283,33 @@ Specify the method for the request. Common methods are GET, HEAD, POST, PUT, TRA
 
 Silent mode
 
+=item -3, --sslv3
+
+Force the usage of SSL v3 for openSSL tunneling
+
 =item --stompmsg <message>
 
 Content of the message for the STOMP message broker. Use with a stomp://server:port/queuename url. 
+
+=item --tcp-nodelay, --notcp-nodelay
+
+Disable the Nagle's algorithm for TCP communication (do not wait for a previous ACK before sending data if small amount of data)
+
+=item -1, --tlsv1_0, --tlsv1
+
+Force the usage of TLS v1.0 for openSSL tunneling
+
+=item --tlsv1_1
+
+Force the usage of TLS v1.1 for openSSL tunneling
+
+=item --tlsv1_2
+
+Force the usage of TLS v1.2 for openSSL tunneling
+
+=item --tlsv1_3
+
+Force the usage of TLS v1.3 for openSSL tunneling
 
 =item --url <url>
 

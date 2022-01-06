@@ -185,9 +185,28 @@ Options
     -s, --silent
         Silent mode - argument compatibility w/ curl, pcurl is silent by default
 
+    -3, --sslv3
+        Force the usage of SSL v3 for openSSL tunneling
+
     --stompmsg <message>
         Content of the message for the STOMP message broker. Use with a
         stomp://server:port/queuename url.
+
+    --tcp-nodelay, --notcp-nodelay
+        Disable the Nagle's algorithm for TCP communication (do not wait for
+        a previous ACK before sending data if small amount of data)
+
+    -1, --tlsv1_0, --tlsv1
+        Force the usage of TLS v1.0 for openSSL tunneling
+
+    --tlsv1_1
+        Force the usage of TLS v1.1 for openSSL tunneling
+
+    --tlsv1_2
+        Force the usage of TLS v1.2 for openSSL tunneling
+
+    --tlsv1_3
+        Force the usage of TLS v1.3 for openSSL tunneling
 
     --url <url>
         Specify explicitly the url. If that parameter is not used, we try to
