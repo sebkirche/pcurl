@@ -343,7 +343,11 @@ sub process_loop {
             }
             #$url->{path} = '*' if $method eq 'OPTIONS';
             # say STDERR $url->{url} if $args{progression} || $args{verbose} || $args{debug};
-            my $r = process_http($method, $url, ($level || (defined $args{level} && $args{level} == 0)) ? \@discovered_at_this_level : undef);
+            my $r = process_http(method     => $method,
+                                 url        => $url,
+                                 discovered => ($level ||
+                                                (defined $args{level} && $args{level} == 0)) ? \@discovered_at_this_level : undef
+                );
             say STDERR sprintf("%s -> %s", $url->{url}, humanize_bytes($r->{byte_len})) if $r->{byte_len} && ($args{progression} || $args{verbose} || $args{debug});
             
         } elsif ($url->{scheme} =~ /^stomp/){
@@ -413,11 +417,13 @@ sub restore_output {
 }
 
 sub process_http {
-    my $method = shift;
-    my $url_final = shift;
-    my $discovered_links =  shift;
+    my %params = @_;
     
-    my ($IN, $OUT, $ERR, $host, $port, $resp, $following);
+    my $method = $params{method};
+    my $url_final = $params{url};
+    my $discovered_links =  $params{discovered};
+    
+    my ($IN, $OUT, $ERR, $host, $port, $resp, $following, $error_code);
 
     $max_redirs = $args{'max-redirs'} if defined $args{'max-redirs'};
     my $redirs = $max_redirs;   # redirs is a countdown of remaining allowed redirections
@@ -576,8 +582,13 @@ sub process_http {
             } elsif ($code == 300){
                 say STDERR "* 300 'Multiple Choices' on $url_final->{url}";
                 goto BREAK;
-            } elsif ($code == 404){
-                say STDERR "* 404 on $url_final->{url}";
+            } elsif ($code >= 400 && $code <= 599){
+                say STDERR "* $code on $url_final->{url}";
+                unless (defined $args{recursive}){
+                    # we do not want to crawl
+                    $error_code = 11 if $code >= 400 && $code <= 499;
+                    $error_code = 12 if $code >= 500 && $code <= 599;
+                }
                 goto BREAK;
             } else {
                 # result other than redirect
@@ -622,6 +633,8 @@ sub process_http {
     close $OUT;
     close $ERR if $ERR;
 
+    exit $error_code if $error_code;
+    
     return $resp;
 }
 
