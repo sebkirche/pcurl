@@ -315,7 +315,14 @@ Action can be of type:
     * `pcurl http://jsonplaceholder.typicode.com/users --action='json:[3]/address/geo'` => `{"lng":-164.299,"lat":29.4572}`
     * `pcurl http://jsonplaceholder.typicode.com/users --action='json:[3]/address/geo/lat'` => `29.4572`
     * `pcurl https://www.w3schools.com/xml/simple.xml --action 'xml:breakfast_menu/food/length()' => `5`
-    * note: `foo/[42]` is equivalent to `foo[42]`
+    * note: 
+        * for arrays:
+            * `foo/[42]` is equivalent to `foo[42]`
+            * `foo[]` is equivalent to `foo[*]`
+            * you can access a single array element `[42]`, a range `[2..12]` or an index list `[1,3,19]`
+        * for objects:
+            * you can access a single key with `/key`
+            * or construct a new object from a list of existing object key `/attrX,attrY,attrZ`
     
 
 * regex: display the match of a regex on the response body

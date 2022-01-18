@@ -24,7 +24,7 @@ use Socket qw(IPPROTO_TCP TCP_NODELAY);
 use Time::Local;
 # use Carp::Always;
 
-our $VERSION = '0.9.3';
+our $VERSION = '0.9.4';
 $|++; # auto flush messages
 
 $Data::Dumper::Sortkeys = 1;
@@ -1911,7 +1911,7 @@ sub get_jpath {
             if ($idx eq '*' || $idx eq ''){
                 # array[] or array[*]
                 @indexes = 0 .. $#{ $ref };
-            } elsif ($idx =~ /^\d+(,\d+)*$/ ) {
+            } elsif ($idx =~ /^\d+(,\d+)*$/ ) { # notation foo()
                 # array[1] or array[1,2,3]
                 @indexes = split /,/, $&;
             } elsif ($idx =~ /^(\d+)\s*\.\.\s*(\d+)$/){
@@ -1931,7 +1931,6 @@ sub get_jpath {
                     $v = $ref;
                 }
             }
-            
         } elsif ($p =~ /^(\w+)\(\)$/){
             return jpath_function($1, $ref);
         } else {
@@ -1942,10 +1941,12 @@ sub get_jpath {
     } elsif (ref $ref eq 'HASH'){
         if ($p){
             # we still have a remaining path
-            if (exists $ref->{$p}){
+            if ($p =~ /,/){     # we have a list of keys
+                $v = { map { $_ => jpath_hash_accessor($ref, $_, $path, $fullpath) } split(/,/,$p) };
+            } elsif (exists $ref->{$p}){ # we have a single key
                 $v = $ref->{$p};
                 return get_jpath($v, $path, $fullpath) if @$path;
-            } elsif ($p =~ /^(\w+)\(\)$/){
+            } elsif ($p =~ /^(\w+)\(\)$/){ # notation foo()
                 return jpath_function($1, $ref);
             } elsif ($p =~ /^\[([^)]*)\]$/){
                 die "Element of path is object, not array";
@@ -1969,7 +1970,7 @@ sub jpath_array_accessor {
     say STDERR "Iterate index $index of array" if $args{debug};
     die sprintf("Index %d is greater than max index of array (%d) in path '%s'", $index, $#{$array}, $fullpath) if $index >= scalar @$array;
 
-    my $elem = @{$array}[$index];
+    my $elem = $array->[$index];
     if (@$path){
         my $path_copy = [ map { $_ } @$path ]; # deep copy of path
         return get_jpath($elem, $path_copy, $fullpath);
@@ -1977,6 +1978,17 @@ sub jpath_array_accessor {
     return $elem;
 }
 
+sub jpath_hash_accessor {
+    my ($hash, $key, $path, $fullpath) = @_;
+    say STDERR "Get key $key of hash" if $args{debug};
+
+    my $elem = $hash->{$key};
+    if (@$path){
+        my $path_copy = [ map { $_ } @$path ]; # deep copy of path
+        return get_jpath($elem, $path_copy, $fullpath);
+    }
+    return $elem;
+}
 sub jpath_function {
     my ($func, $ref) = @_;
     if ($func eq 'length'){     # pseudo function for size
