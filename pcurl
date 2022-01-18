@@ -2115,15 +2115,15 @@ sub parse_uri {
 
         (?: (?<SCHEME> (?&SCHEME_ELEMS)) : )
         (?:  # HIERARCHICAL PART
-          (?: # AUTHORITY                # authority begins with '//'
-            (?: / /
+          (?: / /
+            (?: # AUTHORITY                # authority begins with '//'
               (?<USERINFO>
                 (?<USER> (?&UNRESERVED)+)? (?: : (?<PWD>[^@]+) )? @ 
               )?
-              (?<HOST> [^-/] (?&UNRESERVED)+ )
+              (?<HOST> [^-/] (?&UNRESERVED)+ )?
               (?: : (?<PORT> \d+ ))?
-            )
             (?<PATH1> (?: / (?&PCHAR)* )*              ) # begins with '/' or is empty
+            )
           )
           | (?<PATH2> / (?&PCHAR)+ (?: / (?&PCHAR)* )* ) # begins with '/' but not '//'
           | (?<PATH3> (?&PATH_NOSCHEME)                ) # begins with a non-colon segment
