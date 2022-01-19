@@ -560,13 +560,27 @@ sub process_http {
                 $following++;
                 $args{referer} = $url_final->{url} if $auto_ref;      # use previous url as next referer
                 my ($old_scheme, $old_host, $old_port) = ($url_final->{scheme}, $url_final->{host}, $url_final->{port});
-                $url_final = parse_uri($resp->{headers}{location}); # get redirected url
-                # relative redirect urls may miss some parameters
-                $url_final->{scheme} = $old_scheme unless $url_final->{scheme};
-                $url_final->{host} = $old_host unless $url_final->{host};
-                unless ($url_final->{port}){
-                    $url_final->{port} = $defports{$url_final->{scheme}} || $old_port ;
+                my $loc = $resp->{headers}{location}; # get redirected url
+                if ($loc !~ m{^https?://}){
+                    # fix URLs when scheme is missing
+                    my $user_info = auth_string($url_final);
+                    my $authority = $url_final->{host};
+                    $authority = $user_info . $authority if $user_info;
+                    $authority .= sprintf(":%s", $url_final->{port}) if $url_final->{port} != $defports{$url_final->{scheme}};
+                    $loc = sprintf("%s://%s%s",
+                                   $url_final->{scheme},
+                                   $authority,
+                                   canonicalize($loc));
                 }
+                $url_final = parse_uri($loc);
+                # FIXME: in case of local schemeless url...  <=======
+                # relative redirect urls may miss some parameters
+                if (($url_final->{scheme} ne $old_scheme) || ($url_final->{host} ne $old_host) || ($url_final->{port} != $old_port)){
+                    $url_final->{scheme} = $old_scheme unless $url_final->{scheme};
+                    $url_final->{port} = $defports{$url_final->{scheme}} unless $url_final->{port};
+                }
+                $url_final->{port} = $old_port unless $url_final->{port};
+                $url_final->{host} = $old_host unless $url_final->{host};
                 # compare new url with previous and reconnected if needed
                 if (($url_final->{scheme} ne $old_scheme) || ($url_final->{host} ne $old_host) || ($url_final->{port} != $old_port)){
                     say STDERR "* Closing connection because of scheme/server redirect" if $args{verbose} || $args{debug};
@@ -1502,7 +1516,7 @@ sub discover_links {
     for my $r (@reqs){          # build the list of urls from the anchors/hrefs
 
         # fix URLs when scheme is missing
-        if ($r !~ m{https?://} && index($r, '//') == 0){
+        if ($r !~ m{^https?://} && index($r, '//') == 0){
             $r = $url->{scheme} . ':' . $r;
         }
         
