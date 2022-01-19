@@ -2118,9 +2118,9 @@ sub parse_uri {
           (?: / /
             (?: # AUTHORITY                # authority begins with '//'
               (?<USERINFO>
-                (?<USER> (?&UNRESERVED)+)? (?: : (?<PWD>[^@]+) )? @ 
+                (?<USER> (?&USERCHARS)+ )? (?: : (?<PWD>[^@]+) )? @   # note that password in URL is deprecated
               )?
-              (?<HOST> [^-/] (?&UNRESERVED)+ )?
+              (?<HOST> (?&HOSTCHARS) )?
               (?: : (?<PORT> \d+ ))?
             (?<PATH1> (?: / (?&PCHAR)* )*              ) # begins with '/' or is empty
             )
@@ -2152,6 +2152,30 @@ sub parse_uri {
           #(?<RESERVED>     (?&GENDEL) | (?&SUBDEL)                              ) # reserved
           #(?<GENDEL>       [:/?\#\[\]@]                                         ) # generic delimiters
           (?<SUBDEL>        [!\$&'()\*\+,;=\.]                                   ) # subcomponent delimiters
+          (?<USERCHARS>     (?&UNRESERVED) | (?&PCTENCODED) | (?&SUBDEL)         ) 
+          (?<HOSTCHARS>     (?&IPLIT) | (?&IPV4) | (?&REG_NAME)                  )
+          (?<IPLIT>         \[ ( (?&IPV6) | (?&IPFUTURE) ) \]                    ) # IP literal
+          (?<IPFUTURE>      v (?&HEXDIG)+ \. ( (?&UNRESERVED) | (?&SUBDEL) | :)+ ) # future versions of IP
+          (?<IPV6>            (?:                                        (?: (?&H16) : ){6} (?&LS32) )
+                            | (?:                                     :: (?: (?&H16) : ){5} (?&LS32) )
+                            | (?: (?:                      (?&H16) )? :: (?: (?&H16) : ){4} (?&LS32) )
+                            | (?: (?: (?: (?&H16) : ){0,1} (?&H16) )? :: (?: (?&H16) : ){3} (?&LS32) )
+                            | (?: (?: (?: (?&H16) : ){0,2} (?&H16) )? :: (?: (?&H16) : ){2} (?&LS32) )
+                            | (?: (?: (?: (?&H16) : ){0,3} (?&H16) )? :: (?: (?&H16) : )    (?&LS32) )
+                            | (?: (?: (?: (?&H16) : ){0,4} (?&H16) )? ::                    (?&LS32) )
+                            | (?: (?: (?: (?&H16) : ){0,5} (?&H16) )? ::                    (?&H16)  )
+                            | (?: (?: (?: (?&H16) : ){0,6} (?&H16) )? ::                             )
+)
+          (?<H16>           (?&HEXDIG) (?&HEXDIG)? (?&HEXDIG)? (?&HEXDIG)?       ) # up to 4 hex digits
+          (?<LS32>          ( (?&H16) : (?&H16) ) | (?&IPV4)                     )
+          (?<IPV4>          (?&DEC_OCTET) \. (?&DEC_OCTET) \. (?&DEC_OCTET) \. (?&DEC_OCTET) )
+          (?<DEC_OCTET>     (?&DIGIT)                                              # 0-9
+                            | (?:       [1-9] (?&DIGIT) )                          # 10-99
+                            | (?: 1 (?&DIGIT) (?&DIGIT) )                          # 100-199
+                            | (?: 2   [0-4]   (?&DIGIT) )                          # 200-249
+                            | (?: 2 5 [0-5]             )                        ) # 250-255
+          (?<DIGIT>         [0-9]                                                )
+          (?<REG_NAME>      (?: (?&UNRESERVED) | (?&PCTENCODED) | (?&SUBDEL) )+  ) # Registered name (domain)
         )
             $}x ){
         return undef;
