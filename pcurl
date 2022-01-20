@@ -1361,7 +1361,7 @@ sub load_cookie_jar {
 sub save_cookie_jar {
     my ($file, $cookies) = @_;
     return unless @$cookies; # emulate curl: do nothing if encountered no cookie
-    say STDERR scalar(@$cookies) . " cookie(s) to save in jar $file";
+    say STDERR scalar(@$cookies) . " cookie(s) to save in jar $file" if $args{verbose} or $args{debug};
     my $out;
     if ($file eq '-'){
         $out = *STDOUT;
