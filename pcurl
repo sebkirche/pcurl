@@ -1019,8 +1019,8 @@ sub process_http_response {
                       }
                       if (!$status_done && $line =~ m{^([^\s]+) (\d+) (.*)$}){
                           # this is the response status
-                          $resp{status}{proto} = $1;
-                          $resp{status}{code} = $2;
+                          $resp{status}{proto}   = $1;
+                          $resp{status}{code}    = $2;
                           $resp{status}{message} = $3;
                           $status_done++;
                       }
@@ -1037,13 +1037,25 @@ sub process_http_response {
                                       if ($cookies->[$c]->{domain} eq $hcook->{domain}
                                           && $cookies->[$c]->{path} eq $hcook->{path}
                                           && $cookies->[$c]->{name} eq $hcook->{name}){
-                                          say STDERR "Replacing cookie ".$hcook->{name} if $args{debug};
-                                          splice @$cookies, $c, 1, $hcook;
+                                          say STDERR sprintf("* Replaced cookie %s=\"%s\" for domain %s, path %s, expire %d",
+                                                     $hcook->{name},
+                                                     $hcook->{value},
+                                                     $hcook->{domain},
+                                                     $hcook->{path},
+                                                     $hcook->{'max-age'} || 0) if $args{verbose} || $args{debug};
+                                          # say STDERR "Replacing cookie ".$hcook->{name} if $args{debug};
+                                          # splice @$cookies, $c, 1, $hcook;
+                                          $cookies->[$c] = $hcook;
                                           next HCOOKIE;
                                       }
                                   }
                                   # if we arrive here, the cookie was not found, add it
-                                  say STDERR "Adding cookie ".$hcook->{name} if $args{debug};
+                                  say STDERR sprintf("* Added cookie %s=\"%s\" for domain %s, path %s, expire %d",
+                                                     $hcook->{name},
+                                                     $hcook->{value},
+                                                     $hcook->{domain},
+                                                     $hcook->{path},
+                                                     $hcook->{'max-age'} || 0) if $args{verbose} || $args{debug};
                                   push @$cookies, $hcook;
                               }
                           } elsif ($hname eq 'transfer-encoding' && lc $hvalue eq 'chunked'){
@@ -1361,7 +1373,7 @@ sub load_cookie_jar {
 sub save_cookie_jar {
     my ($file, $cookies) = @_;
     return unless @$cookies; # emulate curl: do nothing if encountered no cookie
-    say STDERR scalar(@$cookies) . " cookie(s) to save in jar $file" if $args{verbose} or $args{debug};
+    say STDERR scalar(@$cookies) . " cookie(s) to save in cookie-jar '$file'" if $args{verbose} or $args{debug};
     my $out;
     if ($file eq '-'){
         $out = *STDOUT;
