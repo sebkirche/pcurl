@@ -24,7 +24,7 @@ use Socket qw(IPPROTO_TCP TCP_NODELAY);
 use Time::Local;
 # use Carp::Always;
 
-our $VERSION = '0.9.4';
+our $VERSION = '0.9.5';
 $|++; # auto flush messages
 
 $Data::Dumper::Sortkeys = 1;
@@ -262,12 +262,25 @@ if ($args{'directory-prefix'}){
     $prefix .= '/' if $prefix !~ m{/$};
 }
 
-my %processed_requests;
+my %processed_request;
+my %broken_url;
+my %failed_url;
+my %discovered_url;
 my $asset_counter = 0;
 process_loop([$cli_url], $args{level} // $max_levels);
-say STDERR sprintf("* Downloaded %d links", scalar(keys %processed_requests)) if $args{verbose} || $args{debug};
+say STDERR sprintf("* Processed %d links", scalar(keys %processed_request)) if $args{summary} || $args{verbose} || $args{debug};
 if ($args{summary}){
-    say STDERR $_ for sort keys %processed_requests;
+    for my $r (sort keys %processed_request){
+        if ($processed_request{$r} > 1){
+            say STDERR sprintf("%s x %d", $r, $processed_request{$r});
+        } else {
+            say STDERR $r;
+        }
+    }
+    say STDERR "* Broken URLS:" if keys %broken_url;
+    say STDERR $_ for sort keys %broken_url;
+    say STDERR "* Failed URLS:" if keys %failed_url;
+    say STDERR "$_ -> $failed_url{$_}" for sort keys %failed_url;
 }
 
 # save the cookie jar if requested
@@ -281,13 +294,18 @@ if ($args{'cookie-jar'}){
 sub process_loop {
     my ($request_list, $level) = @_;
     my @discovered_at_this_level;
-    
+
+    say STDERR "List of urls for this round:\n" . join("\n", @$request_list) if $args{recursive} && ($args{verbose} || $args{debug});
+
+  REQUEST:
     while (@$request_list){
 
-        my $u = shift @$request_list;
-        my $url = parse_uri($u);
+        my $req = shift @$request_list;
+        my $url = parse_uri($req);
         unless ($url){
-            say STDERR "It's strange to me that `$u` does not look like an url...";
+            say STDERR "It's strange to me that `$req` does not look like a valid url...";
+            $broken_url{$req}++;
+            next REQUEST if $args{recursive}; # a broken url is not fatal in recursive mode
             exit 1;
         }
         if ($args{'parse-only'}){
@@ -299,7 +317,7 @@ sub process_loop {
             }
         }
 
-        # complete some default values
+        # complete some default values in case of relative link
         $url = complete_url_default_values($url);
 
         my $ustr = sprintf("%s://%s%s%s%s",
@@ -308,7 +326,6 @@ sub process_loop {
                             $url->{host} || '',
                             defined $url->{port} ? sprintf(':%d', $url->{port}) : '',
                             canonicalize($url->{path}));
-        $processed_requests{$ustr}++;
         $asset_counter++;
         if ($url->{scheme} =~ /^http/){
             # HTTP or HTTPS
@@ -343,12 +360,17 @@ sub process_loop {
             }
             #$url->{path} = '*' if $method eq 'OPTIONS';
             # say STDERR $url->{url} if $args{progression} || $args{verbose} || $args{debug};
-            my $r = process_http(method     => $method,
-                                 url        => $url,
-                                 discovered => ($level ||
-                                                (defined $args{level} && $args{level} == 0)) ? \@discovered_at_this_level : undef
-                );
-            say STDERR sprintf("%s -> %s", $url->{url}, humanize_bytes($r->{byte_len})) if $r->{byte_len} && ($args{progression} || $args{verbose} || $args{debug});
+            unless (exists $processed_request{$req}){
+                # lazy downloader: do it only once
+                my $r = process_http(method     => $method,
+                                     url        => $url,
+                                     discovered => ($level ||
+                                                    (defined $args{level} && $args{level} == 0)) ? \@discovered_at_this_level : undef
+                    );
+                $failed_url{$req} = $r->{status}{code} if $r->{status}{code} >= 400 && $r->{status}{code} <= 599;
+                say STDERR sprintf("%s -> %s", $url->{url}, humanize_bytes($r->{byte_len})) if $r->{byte_len} && ($args{progression} || $args{verbose} || $args{debug});
+            }
+            $processed_request{$req}++;
             
         } elsif ($url->{scheme} =~ /^stomp/){
             unless ($url->{path} && $args{stompmsg}){
@@ -366,7 +388,9 @@ sub process_loop {
             process_file($url, \@discovered_at_this_level);
         }
     }
-    # $asset_counter++;
+    # if we need to process a next level of links in recursive crawler mode
+    # call us recursively TODO: maybe we could just push in $request_list and return to loop
+    #                                               instead of recurse using a doouble while
     if ($args{recursive}
         && @discovered_at_this_level
         && (
@@ -430,6 +454,7 @@ sub process_http {
 
     # set the filename for output when redirecting or using url name
     my $fname;
+    my $out_file;
     if ($args{output}){
         $fname = $args{output};
     } elsif ($args{'remote-name'} && !$args{'remote-header-name'}){
@@ -437,7 +462,7 @@ sub process_http {
             # if this is a file from crawler mode
             $fname = $rel_url_to_local_dir{$url_final->{url}};
             if ($fname =~ m{/$}){
-                $fname .= "/${index_name}";
+                $fname .= "${index_name}";
             }
         } elsif ($url_final->{path} =~ m{.*/([^/]+)$}){
             # get filename from url
@@ -486,11 +511,12 @@ sub process_http {
                 }
                 $h .= '/';
             }
-            make_path("${prefix}${h}${fname}");
-            redirect_output_to_file("${prefix}${h}${fname}");
+            $out_file = "${prefix}${h}${fname}";
+            make_path($out_file);
+            redirect_output_to_file($out_file);
         } else {
             # not recursive
-            redirect_output_to_file("${prefix}${fname}");
+            redirect_output_to_file($out_file);
         }
 
     }
@@ -598,6 +624,10 @@ sub process_http {
                 goto BREAK;
             } elsif ($code >= 400 && $code <= 599){
                 say STDERR "* $code on $url_final->{url}";
+                if ($out_file){
+                    # do not leave empty files
+                    unlink $out_file;
+                }
                 unless (defined $args{recursive}){
                     # we do not want to crawl
                     $error_code = 11 if $code >= 400 && $code <= 499;
@@ -752,7 +782,7 @@ sub get_proxy_settings {
     
     $proxy = parse_uri($proxy_set);
     unless ($proxy){
-        say STDERR "It's strange to me that `$proxy_set` does not look as an url for proxy...";
+        say STDERR "It's strange to me that `$proxy_set` does not look as a valid url for proxy...";
         exit 4;
     }
     $proxy = complete_url_default_values($proxy);
@@ -1500,7 +1530,7 @@ sub discover_links {
 
     # TODO: look only for img/css for first url, unless --page-requisites
 
-    my @links = grep { defined } ${$resp->{captured}} =~ m{a[^>]+href="([^"]+)"}g; # dumb link collector
+    my @links = grep { defined } ${$resp->{captured}} =~ m{a[^>]+href="([^"]+)"}gi; # dumb link collector
     my @resources = grep { defined } ${$resp->{captured}} =~ m{
                 (?:
                 <img[^>]+src="([^"]+)"
@@ -1531,9 +1561,13 @@ sub discover_links {
         if ($r !~ m{^https?://} && index($r, '//') == 0){
             $r = $url->{scheme} . ':' . $r;
         }
+
+        # remove fragment (avoid duplicates)
+        $r =~ s/#.*$//;
         
-        next if $dups{$r};      # avoid multiple downloads
+        next if $dups{$r};        # avoid multiple downloads
         next if $r =~ /^mailto:/; # avoid mail links
+        next if $r =~ /^news:/;   # avoid news links
 
         $dups{$r}++;
         my $local_dest = '';
@@ -1553,14 +1587,12 @@ sub discover_links {
             if (!$keep_tree){
                 # remove path to retrieve all in flat directory
                 $local_dest = $r =~ s{^.*/}{}r;
-                # $parent_dir = '/';
             } else {
                 # we keep the tree structure
                 if ($r =~ m{^/}){
                     next if $args{relative}; # ignore if we want only relative links
                     $local_dest = $r;
                 } else {
-
                     if ($parent_dir){
                         $local_dest = "$parent_dir$r";
                     } else {
@@ -1569,16 +1601,13 @@ sub discover_links {
                 }
             }
             $local_dest =~ s{^/}{};
-            $local_dest =~ s/%20/ /g;
+            # $local_dest =~ s/%20/ /g; # FIXME: do not decode urls
+                                        # and remove the fragment
             if ($r =~ m{^/}){
                # absolute local url, use it instead of current path + link
-#                $r =~ s/ /%20/g;
                 $p = $r;
             } else {
                 # relative local url, add to the current path
-#                $local_dest = $r if $keep_tree;
-                #                $r =~ s/ /%20/g;
-                
                 $p = "$parent_dir$r";
             }
             # avoid getting too much of a site if unwanted
@@ -1602,10 +1631,10 @@ sub discover_links {
                             $p);
             
             $rel_url_to_local_dir{$u} = $local_dest if $local_dest; # store the local relative path
-            unless(exists $processed_requests{$u}){
+            unless(exists $discovered_url{$u}){
                 # say STDERR "* adding $u to discoverd urls" if $args{verbose} || $args{debug};
                 push @discovered_urls, $u;
-                $processed_requests{$u}++;
+                $discovered_url{$u}++;
             }
         }
     }
