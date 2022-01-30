@@ -28,9 +28,14 @@ Perl limited dependencies are:
 * Time::Local
 * locally available openSSL
 
-pCurl tries to supports (a small subset of) cURL command line arguments.
+pCurl tries to supports (a small subset of) cURL command line parameters, with some shortcuts like 
 
-Usage
+* `--content foo` as synonym for `-H "Content-Type: foo"`
+* `--accept bar` as synonym for `-H "Accept: bar"`
+
+and some of wget parameters for recursive crawling like `--recursive`, `--page-requisite`, `--level`, `--cut-dirs`, `--no-parent`, `--no-host-dirs`... I am doing casual web page archiving and I found convenient to add my most used features of wget im my tool.
+
+ Usage
 -----
     pcurl.pl [options] [url]
 
