@@ -268,7 +268,7 @@ my %failed_url;
 my %discovered_url;
 my $asset_counter = 0;
 process_loop([$cli_url], $args{level} // $max_levels);
-say STDERR sprintf("* Processed %d links", scalar(keys %processed_request)) if $args{summary} || $args{verbose} || $args{debug};
+say STDERR sprintf("* %d links processed", scalar(keys %processed_request)) if $args{summary} || $args{verbose} || $args{debug};
 if ($args{summary}){
     for my $r (sort keys %processed_request){
         if ($processed_request{$r} > 1){
@@ -277,9 +277,9 @@ if ($args{summary}){
             say STDERR $r;
         }
     }
-    say STDERR "* Broken URLS:" if keys %broken_url;
+    say STDERR sprintf("* %d Broken URLS:", scalar keys %broken_url) if keys %broken_url;
     say STDERR $_ for sort keys %broken_url;
-    say STDERR "* Failed URLS:" if keys %failed_url;
+    say STDERR sprintf("* %d Failed URLS:", scalar keys %failed_url) if keys %failed_url;
     say STDERR "$_ -> $failed_url{$_}" for sort keys %failed_url;
 }
 
