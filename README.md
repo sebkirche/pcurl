@@ -51,7 +51,7 @@ Options
 
     --basic <user:password>
     --user  <user:password>
-        Use basic http authentication. Sepcified in the form user:password
+        Use basic http authentication. Specified in the form user:password
         it is passed to the server in Base64 encoding.
 
     -b, --cookie <string or file>
