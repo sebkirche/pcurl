@@ -1530,7 +1530,8 @@ sub discover_links {
 
     # TODO: look only for img/css for first url, unless --page-requisites
 
-    my @links = grep { defined } ${$resp->{captured}} =~ m{a[^>]+href="([^"]+)"}gi; # dumb link collector
+    my @links = grep { defined } ${$resp->{captured}} =~ m{<a[^>]+href="([^"]+)
+                                                           |<frame[^>]+src="([^"]+)"}gix; # dumb link collector
     my @resources = grep { defined } ${$resp->{captured}} =~ m{
                 (?:
                 <img[^>]+src="([^"]+)"
