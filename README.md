@@ -28,7 +28,7 @@ Perl limited dependencies are:
 * Time::Local
 * locally available openSSL
 
-pCurl tries to supports (a small subset of) cURL command line parameters, with some shortcuts like 
+pCurl tries to supports (a small subset of) cURL command line parameters, cookies, additional parameters as shortcuts to standard curl parameters like 
 
 * `--content foo` as synonym for `-H "Content-Type: foo"`
 * `--accept bar` as synonym for `-H "Accept: bar"`
