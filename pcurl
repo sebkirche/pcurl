@@ -391,7 +391,7 @@ sub process_loop {
     # if we need to process a next level of links in recursive crawler mode
     # call us recursively TODO: maybe we could just push in $request_list and return to loop
     #                                               instead of recurse using a doouble while
-    if ($args{recursive}
+    if ($args{recursive} || $process_action && index($process_action->{what}, 'getlinked')==0
         && @discovered_at_this_level
         && (
             $level > 0
@@ -400,7 +400,7 @@ sub process_loop {
         ){
         say STDERR "* processing next level" if $args{verbose} || $args{debug};
         my $next_level;
-        if ($args{level} > 0){
+        if ($args{level} && $args{level} > 0){
             $next_level = $level - 1;
         } else {
             $next_level = 1;
@@ -649,14 +649,14 @@ sub process_http {
                 }                                   
 
                 # save eventually the captured data into a file for getlinked or recursive
-                if ($resp->{captured}
-                    && (
-                        ($process_action && index($process_action->{what}, 'getlinked') == 0)
-                        ||
-                        $args{recursive}
-                    )){
-                    say STDOUT ${$resp->{captured}} if defined ${$resp->{captured}};
-                }
+                #if ($resp->{captured}
+                #    && (
+                #        ($process_action && index($process_action->{what}, 'getlinked') == 0)
+                #        ||
+                #        $args{recursive}
+                #    )){
+                #    say STDOUT ${$resp->{captured}} if defined ${$resp->{captured}};
+                #}
 
                 goto BREAK;         # weird, 'last' is throwing a warning "Exiting subroutine via last"
             }
@@ -664,13 +664,13 @@ sub process_http {
     } while ($resp->{byte_len} && $url_final && $redirs >= 0);
   BREAK:
     restore_output();
-    if ($args{'remote-time'}
+    if ($args{'remote-time'}    # FIXME: add test on redirection
         && $fname #$resp->{redirected}
         && $resp->{headers}{'last-modified'}){
         my $timestamp = $resp->{headers}{'last-modified'};
         my $epoch = str2epoch($timestamp);
-        if ($epoch > -1){
-            utime($epoch, $epoch, "${prefix}${fname}") or say STDERR "Cannot set modification time of $resp->{redirected}: $!";
+        if (-f $out_file && $epoch > -1){
+            utime($epoch, $epoch, $out_file) or say STDERR "Cannot set modification time of $resp->{redirected}: $!";
         }
     }
 
@@ -1477,7 +1477,7 @@ sub perform_action {
             # say STDERR "* Error??!: no data captured to perform action " . $action->{what};
             return;
         }
-        my @url = discover_links($resp, $url, undef, undef, 0);
+        my @url = discover_links($resp, $url, $action->{value}, undef, 0);
         say STDOUT $_ for @url;
     } elsif (index($action->{what}, 'getlinked') == 0 && !$action->{done}){
         my @refs = getlinked_action($action, $url, $resp);
@@ -1531,8 +1531,8 @@ sub discover_links {
 
     # TODO: look only for img/css for first url, unless --page-requisites
 
-    my @links = grep { defined } ${$resp->{captured}} =~ m{<a[^>]+href="([^"]+)
-                                                           |<frame[^>]+src="([^"]+)"}gix; # dumb link collector
+    my @links = grep { defined } ${$resp->{captured}} =~ m{(?:<a[^>]+href="?([^">]+)
+                                                           |<frame[^>]+src="([^"]+)")}gix; # dumb link collector
     my @resources = grep { defined } ${$resp->{captured}} =~ m{
                 (?:
                 <img[^>]+src="([^"]+)"
@@ -1545,11 +1545,13 @@ sub discover_links {
     if ($acc || $rej){
         if ($acc){
             say STDERR "grepping accept on $acc" if $args{debug};
-            @links = grep { /$acc/ } @links;
+            @links     = grep { /$acc/ } @links;
+            @resources = grep { /$acc/ } @resources;
         }
         if ($rej){
             say STDERR "grepping reject on $rej" if $args{debug};
-            @links = grep { ! /$rej/ } @links;
+            @links     = grep { ! /$rej/ } @links;
+            @resources = grep { ! /$rej/ } @resources;
         }            
     }
     @reqs = (@links, @resources);
