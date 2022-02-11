@@ -4,7 +4,9 @@
 #         with built-in json and xml parsers
 #         and custom features like STOMP message sending
 #
-# (c) 2019, 2020, 2021 - Sébastien Kirche
+# (c) 2019, 2020, 2022 - Sébastien Kirche
+
+package Pcurl;
 
 use warnings;
 use strict;
@@ -69,7 +71,22 @@ my $is_out_redirected = 0;
 my $initial_name_before_redirect;
 my ($uagent, $http_vers, $tunnel_pid, $auto_ref, $use_cookies, $cookies, $process_action);
 my %rel_url_to_local_dir;
-    
+my %args;
+my $index_name;
+my $acceptrx;
+my $rejectrx;
+my $prefix = '';
+my %broken_url;                 # URLs that are not valid
+my %failed_url;                 # URLs that resulted in failure
+my %discovered_url;
+my %processed_request;          # Requests done, for not doing again
+my $asset_counter = 0;
+
+
+__PACKAGE__->cli( @ARGV ) if !caller() || caller() eq 'PAR';
+
+sub cli {
+
 my @getopt_defs = (
     'accept=s',
     'action=s',
@@ -162,7 +179,7 @@ if ($Getopt::Long::VERSION >= '2.39') { # Getopt::Long does not support alias wi
           'http11');
 }
 
-my %args = ( 'tcp-nodelay' => 1,
+%args = ( 'tcp-nodelay' => 1,
              'data-urlencode' => [],
              header => [],
              'json-pp-indent' => 2,
@@ -250,23 +267,17 @@ unless ($cli_url){
     pod2usage(-exitval => 1);
 }
 
-my $acceptrx = $args{'accept-regex'};
-my $rejectrx = $args{'reject-regex'};
+$acceptrx = $args{'accept-regex'};
+$rejectrx = $args{'reject-regex'};
 $acceptrx = '(' . join ('|', split(/,/, $args{accept})) . ')$' if $args{accept}; 
 $rejectrx = '(' . join ('|', split(/,/, $args{reject})) . ')$' if $args{reject};
 
-my $index_name = $args{'default-page'} || $default_page;
-my $prefix = '';
+$index_name = $args{'default-page'} || $default_page;
 if ($args{'directory-prefix'}){
     $prefix = $args{'directory-prefix'};
     $prefix .= '/' if $prefix !~ m{/$};
 }
 
-my %processed_request;
-my %broken_url;
-my %failed_url;
-my %discovered_url;
-my $asset_counter = 0;
 process_loop([$cli_url], $args{level} // $max_levels);
 say STDERR sprintf("* %d links processed", scalar(keys %processed_request)) if $args{summary} || $args{verbose} || $args{debug};
 if ($args{summary}){
@@ -288,6 +299,7 @@ if ($args{'cookie-jar'}){
     save_cookie_jar($args{'cookie-jar'}, $cookies);
 }
 
+}
 
 # ------- End of main prog ---------------------------------------------------------------
 
@@ -391,7 +403,7 @@ sub process_loop {
     # if we need to process a next level of links in recursive crawler mode
     # call us recursively TODO: maybe we could just push in $request_list and return to loop
     #                                               instead of recurse using a doouble while
-    if ($args{recursive}
+    if ($args{recursive} || $process_action && index($process_action->{what}, 'getlinked')==0
         && @discovered_at_this_level
         && (
             $level > 0
@@ -400,7 +412,7 @@ sub process_loop {
         ){
         say STDERR "* processing next level" if $args{verbose} || $args{debug};
         my $next_level;
-        if ($args{level} > 0){
+        if ($args{level} && $args{level} > 0){
             $next_level = $level - 1;
         } else {
             $next_level = 1;
@@ -649,14 +661,14 @@ sub process_http {
                 }                                   
 
                 # save eventually the captured data into a file for getlinked or recursive
-                if ($resp->{captured}
-                    && (
-                        ($process_action && index($process_action->{what}, 'getlinked') == 0)
-                        ||
-                        $args{recursive}
-                    )){
-                    say STDOUT ${$resp->{captured}} if defined ${$resp->{captured}};
-                }
+                #if ($resp->{captured}
+                #    && (
+                #        ($process_action && index($process_action->{what}, 'getlinked') == 0)
+                #        ||
+                #        $args{recursive}
+                #    )){
+                #    say STDOUT ${$resp->{captured}} if defined ${$resp->{captured}};
+                #}
 
                 goto BREAK;         # weird, 'last' is throwing a warning "Exiting subroutine via last"
             }
@@ -664,13 +676,13 @@ sub process_http {
     } while ($resp->{byte_len} && $url_final && $redirs >= 0);
   BREAK:
     restore_output();
-    if ($args{'remote-time'}
+    if ($args{'remote-time'}    # FIXME: add test on redirection
         && $fname #$resp->{redirected}
         && $resp->{headers}{'last-modified'}){
         my $timestamp = $resp->{headers}{'last-modified'};
         my $epoch = str2epoch($timestamp);
-        if ($epoch > -1){
-            utime($epoch, $epoch, "${prefix}${fname}") or say STDERR "Cannot set modification time of $resp->{redirected}: $!";
+        if (-f $out_file && $epoch > -1){
+            utime($epoch, $epoch, $out_file) or say STDERR "Cannot set modification time of $resp->{redirected}: $!";
         }
     }
 
@@ -1477,7 +1489,7 @@ sub perform_action {
             # say STDERR "* Error??!: no data captured to perform action " . $action->{what};
             return;
         }
-        my @url = discover_links($resp, $url, undef, undef, 0);
+        my @url = discover_links($resp, $url, $action->{value}, undef, 0);
         say STDOUT $_ for @url;
     } elsif (index($action->{what}, 'getlinked') == 0 && !$action->{done}){
         my @refs = getlinked_action($action, $url, $resp);
@@ -1531,8 +1543,8 @@ sub discover_links {
 
     # TODO: look only for img/css for first url, unless --page-requisites
 
-    my @links = grep { defined } ${$resp->{captured}} =~ m{<a[^>]+href="([^"]+)
-                                                           |<frame[^>]+src="([^"]+)"}gix; # dumb link collector
+    my @links = grep { defined } ${$resp->{captured}} =~ m{(?:<a[^>]+href="?([^">]+)
+                                                           |<frame[^>]+src="([^"]+)")}gix; # dumb link collector
     my @resources = grep { defined } ${$resp->{captured}} =~ m{
                 (?:
                 <img[^>]+src="([^"]+)"
@@ -1545,11 +1557,13 @@ sub discover_links {
     if ($acc || $rej){
         if ($acc){
             say STDERR "grepping accept on $acc" if $args{debug};
-            @links = grep { /$acc/ } @links;
+            @links     = grep { /$acc/ } @links;
+            @resources = grep { /$acc/ } @resources;
         }
         if ($rej){
             say STDERR "grepping reject on $rej" if $args{debug};
-            @links = grep { ! /$rej/ } @links;
+            @links     = grep { ! /$rej/ } @links;
+            @resources = grep { ! /$rej/ } @resources;
         }            
     }
     @reqs = (@links, @resources);
@@ -3209,7 +3223,9 @@ sub code_to_utf8 {
 # =========== end of XML::TreePP =======================
 
 }
-    
+
+42 if defined(wantarray);
+
 __END__
 
 =head1 NAME
@@ -3222,7 +3238,7 @@ v0.7.3
 
 =head1 SYNOPSIS
 
-pcurl.pl [options] [url]
+perl Net/Pcurl.pm [options] [url]
 
 =head1 DESCRIPTION
 
