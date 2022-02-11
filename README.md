@@ -302,6 +302,16 @@ Web crawling features:
         Ask for a final list of retrieved resources, if you do not want to
         see other details.
 
+  Examples:
+    parse an URI to show its components
+            pcurl https://mylogin:mypwd@subdomain.domain.com:1234/some/path/to/resource --parse-only
+
+    list linked resources on a page
+            pcurl https://domain.org/some/path/to/page.html --action listlinks:
+
+    Get a page and all its direct linked resources (without going up to
+    parent)
+            pcurl -ORL --recursive --no-parent --page-requisites --no-host-directories --level 1 --recursive-flat --cut-dirs 2  --progression https://path
 
 Actions
 -------

@@ -24,7 +24,7 @@ use Socket qw(IPPROTO_TCP TCP_NODELAY);
 use Time::Local;
 # use Carp::Always;
 
-our $VERSION = '0.9.5';
+our $VERSION = '0.9.6';
 $|++; # auto flush messages
 
 $Data::Dumper::Sortkeys = 1;
@@ -516,6 +516,7 @@ sub process_http {
             redirect_output_to_file($out_file);
         } else {
             # not recursive
+            $out_file = "${prefix}${fname}";
             redirect_output_to_file($out_file);
         }
 
@@ -3520,11 +3521,15 @@ Ask for a final list of retrieved resources, if you do not want to see other det
 
 =item parse an URI to show its components
 
-    pcurl https://mylogin:mypwd@subdomain.domain.com:1234/some/path/to/resource
+    pcurl https://mylogin:mypwd@subdomain.domain.com:1234/some/path/to/resource --parse-only
 
 =item list linked resources on a page
 
-    pcurl https:///page-6044ea02b75b0.html --action listlinks:
+    pcurl https://domain.org/some/path/to/page.html --action listlinks:
+
+=item Get a page and all its direct linked resources (without going up to parent)
+
+    pcurl -ORL --recursive --no-parent --page-requisites --no-host-directories --level 1 --recursive-flat --cut-dirs 2  --progression https://path
 
 =cut
 
