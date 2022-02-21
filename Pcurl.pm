@@ -8,6 +8,9 @@
 
 package Pcurl;
 
+use Exporter qw/import/;
+@EXPORT_OK = qw/hexdump parse_uri/;
+
 use warnings;
 use strict;
 use feature 'say';
@@ -16,6 +19,8 @@ use utf8;
 use open ':std', ':encoding(UTF-8)';
 use version;
 use Data::Dumper;
+$Data::Dumper::Sortkeys = 1;
+$Data::Dumper::Indent   = 2;
 use Getopt::Long qw(:config no_ignore_case bundling auto_version); # debug
 use IO::Select;
 use IO::Socket::INET;
@@ -26,11 +31,8 @@ use Socket qw(IPPROTO_TCP TCP_NODELAY);
 use Time::Local;
 # use Carp::Always;
 
-our $VERSION = '0.9.6';
+our $VERSION = '0.9.7';
 $|++; # auto flush messages
-
-$Data::Dumper::Sortkeys = 1;
-$Data::Dumper::Indent   = 2;
 
 # -------- Signal handlers -------------------------
 BEGIN{                          # automagic breakpoint for warnings when script is run by perl -d
@@ -2426,6 +2428,8 @@ sub humanize_bytes {
     return $r;
 }
 
+
+
 BEGIN {
 # ================== XML::TreePP =======================
 
@@ -3222,9 +3226,10 @@ sub code_to_utf8 {
 }
 # =========== end of XML::TreePP =======================
 
-}
+} # BEGIN
 
-42 if defined(wantarray);
+return 42 if defined(wantarray); # true value when used as package
+
 
 __END__
 

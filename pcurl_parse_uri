@@ -1,0 +1,1 @@
+perl -I. -MPcurl=parse_uri -MData::Dumper -le '$u=parse_uri("http://jdoe:pwd\@www.google.fr:42/some/public_page.html?param=value&other=undef#some_paragraph");print Dumper $u'
