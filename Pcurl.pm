@@ -9,7 +9,7 @@
 package Pcurl;
 
 use Exporter qw/import/;
-@EXPORT_OK = qw/hexdump parse_uri/;
+@EXPORT_OK = qw/hexdump parse_uri process_http/;
 
 use warnings;
 use strict;
@@ -280,6 +280,16 @@ if ($args{'directory-prefix'}){
     $prefix .= '/' if $prefix !~ m{/$};
 }
 
+if ($args{'parse-only'}){
+    my $uri = validate_uri($cli_url);
+    if ($uri){
+        dump_url($uri);
+        exit 0;
+    } else {
+        exit 1;
+    }
+}
+
 process_loop([$cli_url], $args{level} // $max_levels);
 say STDERR sprintf("* %d links processed", scalar(keys %processed_request)) if $args{summary} || $args{verbose} || $args{debug};
 if ($args{summary}){
@@ -315,20 +325,11 @@ sub process_loop {
     while (@$request_list){
 
         my $req = shift @$request_list;
-        my $url = parse_uri($req);
+        my $url = validate_uri($req);
         unless ($url){
-            say STDERR "It's strange to me that `$req` does not look like a valid url...";
             $broken_url{$req}++;
             next REQUEST if $args{recursive}; # a broken url is not fatal in recursive mode
             exit 1;
-        }
-        if ($args{'parse-only'}){
-            if ($url){
-                dump_url($url);
-                exit 0;
-            } else {
-                exit 1;
-            }
         }
 
         # complete some default values in case of relative link
@@ -452,6 +453,15 @@ sub restore_output {
         open (STDOUT, '>&', $STDOLD);
         $is_out_redirected = 0;
     }
+}
+
+sub validate_uri {
+    my $uri = shift;
+    my $parsed = parse_uri($uri);
+    unless ($parsed){
+        say STDERR "It's strange to me that `$uri` does not look like a valid URI...";
+    }
+    return $parsed;
 }
 
 sub process_http {
