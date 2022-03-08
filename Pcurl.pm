@@ -68,10 +68,11 @@ my %defports = ( http  => 80,   # default ports
 my $default_page = 'index.html'; # default name for directory index
 
 # when writing output in a file, holder of the initial STDOUT
-my $STDOLD;
+# my $STDOLD;
+my $current_output;
 my $is_out_redirected = 0;
-my $initial_name_before_redirect;
-my ($uagent, $http_vers, $tunnel_pid, $auto_ref, $use_cookies, $cookies, $process_action);
+
+my ($http_vers, $tunnel_pid, $auto_ref, $use_cookies, $cookies, $process_action);
 my %rel_url_to_local_dir;
 my %args;
 my $index_name;
@@ -84,8 +85,18 @@ my %discovered_url;
 my %processed_request;          # Requests done, for not doing again
 my $asset_counter = 0;
 
+%args = ( 'tcp-nodelay'      => 1,
+          'data-urlencode'   => [],
+          header             => [],
+          'json-pp-indent'   => 2,
+          'user-agent'       => "pCurl/$VERSION",
+          'xml-pp-indent'    => 2,
+          'xml-root-element' => 'root'
+    );
 
-__PACKAGE__->cli( @ARGV ) if !caller() || caller() eq 'PAR';
+$http_vers = '1.1';             # default version we want for http
+
+__PACKAGE__->cli( @ARGV ) if !caller() || caller() eq 'PAR'; # handles package called as a script
 
 sub cli {
 
@@ -181,14 +192,6 @@ if ($Getopt::Long::VERSION >= '2.39') { # Getopt::Long does not support alias wi
           'http11');
 }
 
-%args = ( 'tcp-nodelay' => 1,
-             'data-urlencode' => [],
-             header => [],
-             'json-pp-indent' => 2,
-             'xml-pp-indent' => 2,
-             'xml-root-element' => 'root'
-    );
-
 GetOptions(\%args, @getopt_defs ) or pod2usage(-exitval => 2, -verbose => 0);
 pod2usage(-exitval => 0, -verbose => 1) if $args{help};
 pod2usage(-exitval => 0, -verbose => 2) if $args{man};
@@ -219,9 +222,6 @@ if ($args{'debug-json'}){
     }
     exit 0;
 }
-
-# User-Agent
-$uagent = $args{'user-agent'} || "pCurl/$VERSION";
 
 # Referer provided, or auto-referer?
 # auto-referer is: take the url of the previous url as referer when following redirects 
@@ -436,8 +436,8 @@ sub prefix_print {
 sub redirect_output_to_file {
     my $out_name = shift;
     if (!$is_out_redirected && $out_name && $out_name ne '-'){
-        open $STDOLD, '>&', STDOUT;
-        open STDOUT, '>', $out_name or die "Cannot open $out_name for output.";
+        # open $STDOLD, '>&', STDOUT;
+        open $current_output, '>', $out_name or die "Cannot open $out_name for output.";
         # binmode(STDOUT, ":raw");
         # later, to restore STDOUT:
         # open (STDOUT, '>&', $STDOLD);
@@ -448,12 +448,13 @@ sub redirect_output_to_file {
 # close out file and restore STDOUT
 sub restore_output {
     my $out_name = $args{output};
-    if ($is_out_redirected){
-        close STDOUT;
-        open (STDOUT, '>&', $STDOLD);
+    if ($is_out_redirected && fileno($current_output) != fileno(STDOUT)){
+        close $current_output;
+        # open (STDOUT, '>&', $STDOLD);
         $is_out_redirected = 0;
     }
 }
+# ---------------------------------------------------------------------------------
 
 sub validate_uri {
     my $uri = shift;
@@ -540,10 +541,15 @@ sub process_http {
             redirect_output_to_file($out_file);
         } else {
             # not recursive
-            $out_file = "${prefix}${fname}";
-            redirect_output_to_file($out_file);
+            if ($fname eq '-'){
+                $current_output = *STDOUT;
+            } else {
+                $out_file = "${prefix}${fname}";
+                redirect_output_to_file($out_file);
+            }
         }
-
+    } else {
+        $current_output = *STDOUT;
     }
     
     do {
@@ -593,7 +599,7 @@ sub process_http {
         send_http_request($IN, $OUT, $ERR, $headers, $body);
         
         # for some actions we need to capure the output into a variable
-        my $need_capture = defined $process_action && !$process_action->{done}; # && $process_action->{action} eq 'grep';
+        my $need_capture = defined $process_action && !$process_action->{done} || $params{capture}; # && $process_action->{action} eq 'grep';
 
         # Receive the response
         $resp = process_http_response($IN, $ERR, $url_final, $url_proxy, $need_capture, $fname, $following);
@@ -738,7 +744,7 @@ sub process_file {
             my $success = read($fh, $buf, 1024, length($buf));
             die $! if not defined $success;
             last if not $success;
-            print STDOUT $buf;
+            print $current_output $buf;
         }
         close $fh;
     }
@@ -756,7 +762,7 @@ sub send_http_request {
 
     my $headers_txt = join "", map { "$_\r\n" } @$headers;
     print $OUT $headers_txt;    # send headers to server
-    print STDOUT $headers_txt if $args{'include-request'};
+    print $current_output $headers_txt if $args{'include-request'};
 
     if (defined $body){
         my $sent = 0;
@@ -888,7 +894,7 @@ sub build_http_request_headers {
             $hostport = ":$u->{port}";
         }
         push @$headers, "Host: $u->{host}${hostport}" unless exists $custom{host};
-        add_http_header($headers, \%custom, 'User-Agent', ${uagent});
+        add_http_header($headers, \%custom, 'User-Agent', $args{'user-agent'});
         add_http_header($headers, \%custom, 'Accept', '*/*');
         add_http_header($headers, \%custom, 'Connection', 'close');
         my $auth = $args{basic} || ($u->{auth} ? $u->{auth}->{user} . ':' . $u->{auth}->{password} : undef);
@@ -1003,7 +1009,7 @@ sub build_http_proxy_headers {
             push @$headers, "CONNECT $u->{host}:$u->{port} HTTP/1.1";
         }
         push @$headers, "Host: $u->{host}:$u->{port}";
-        push @$headers, "User-Agent: ${uagent}";
+        push @$headers, "User-Agent: " . $args{'user-agent'};
     }
     
     my $auth = $args{'proxy-user'} || ($p->{auth} ? $p->{auth}->{user} . ':' . $p->{auth}->{password} : undef);
@@ -1029,17 +1035,15 @@ sub process_http_response {
     my $content_length = 0;     # size of response, according to the response header
     my %headers;                # a map for all received headers
     my %resp;                   # response meta-data
-    my $capture;                # buffer to print response instead of STDOUT
+    my $resp_buf;                # buffer to store response instead of STDOUT/file
 
+    my $out;
     # when we receive the server response, we print the result to STDOUT (and possibly the headers)
     # but when we need to process actions (e.g. for pattern matching) we capture output to a memory buffer
-    
-    # if we need to capture the output, store the original STDOUT
-    my $STDOUT_UNCAPTURED;
     if ($need_capture){
-        open $STDOUT_UNCAPTURED, '>&', STDOUT;
-        close STDOUT;
-        open STDOUT, '>', \$capture or die "Cannot capture output: $!";
+        open($out, '>', \$resp_buf) or die "Cannot capture output: $!";
+    } else {
+        $out = $current_output;
     }
     my $selector = IO::Select->new();
     $selector->add($ERR) if $ERR;
@@ -1067,7 +1071,7 @@ sub process_http_response {
                       $received += length($line);
                       $line =~ s/[\r\n]+$//;
                       say STDERR '< ', $line if $args{verbose} || $args{debug};
-                      say STDOUT $line if !$need_capture && $args{head} || $args{'include-response'};
+                      say $out $line if !$need_capture && $args{head} || $args{'include-response'};
                       if ($line =~ /^$/){
                           $headers_done++;
                           last HEAD;
@@ -1136,13 +1140,14 @@ sub process_http_response {
                 } # end of headers processing --------------------------------------------
                 goto AFTER_BODY if $only_body;
                 
-                # avoid unwanted binary output
                 $content_length = $headers{'content-length'};
+
+                # avoid unwanted binary output
                 if ($headers{'content-type'}){
                     if ($headers{'content-type'} =~ /charset=binary/){
                         if (!$args{output}
                             && (!$args{'remote-name'} && !$args{'remote-header-name'})
-                            && -t STDOUT){
+                            && -t $out){
                             prefix_print(\*STDERR, 'Warning: ', <<"NO_BIN");
 Binary output can mess up your terminal. Use "--output -" to tell 
 curl to output it to your terminal anyway, or consider "--output 
@@ -1151,9 +1156,7 @@ NO_BIN
                             exit 10;
                         }
                     } elsif ($args{recursive} && $headers{'content-type'} =~ m{(text/html|text/css)}){
-                        open $STDOUT_UNCAPTURED, '>&', STDOUT;
-                        close STDOUT;
-                        open STDOUT, '>', \$capture or die "Cannot capture output: $!";
+                        open $out, '>', \$resp_buf or die "Cannot capture output: $!";
                         $need_capture = 1;
                     }
                 }
@@ -1184,7 +1187,7 @@ NO_BIN
                 # we show body contents only when not following redirects
                 my $is_redirected = $resp{status} && $resp{status}{code} && $resp{status}{code} =~ /^3/;
                 say STDERR "* Ignoring the response-body" if ($is_redirected && $args{location}) && (! $fh->eof ) && ($args{verbose} || $args{debug});
-                binmode(STDOUT, ":raw"); # pass in raw layer to prevent utf8 or cr/lf conversion in binary files
+                binmode($out, ":raw"); # pass in raw layer to prevent utf8 or cr/lf conversion in binary files
 
 
                 if ($content_length){                                         
@@ -1220,7 +1223,7 @@ NO_BIN
                             }
                             say STDERR "* Read $block bytes" if $args{debug};
                             $received += $block;
-                            print STDOUT $buf unless ($is_redirected && $args{location});
+                            print $out $buf unless ($is_redirected && $args{location});
                         }
                     }
                     if ($chunked_mode){
@@ -1244,10 +1247,9 @@ NO_BIN
     $resp{byte_len} = $received; # keep the size of read data
     if ($need_capture){
         # restore the output to the original value before capture
-        say STDERR sprintf("* Captured %d bytes:\n%s", length $capture, $capture // '') if $args{debug};
-        $resp{captured} = \$capture;
-        close STDOUT;
-        open (STDOUT, '>&', $STDOUT_UNCAPTURED);
+        say STDERR sprintf("* Captured %d bytes:\n%s", length $resp_buf, $resp_buf // '') if $args{debug};
+        close $out;
+        $resp{captured} = \$resp_buf;
     }
 
     say STDERR "Parsed cookies: ", Dumper $cookies if $args{debug};
@@ -1435,6 +1437,7 @@ sub save_cookie_jar {
     } else {
         open $out, '>', $file or do { say STDERR "* WARNING: failed to save cookies in $file"; return}; # emulate curl
     }
+    my $uagent = $args{'use-agent'};
     print $out <<HEADER;
 # Netscape HTTP Cookie File
 # https://curl.haxx.se/docs/http-cookies.html
@@ -1487,14 +1490,14 @@ sub perform_action {
     my ($action, $url, $resp, $discovered_links) = @_;
 
     if ($action->{what} eq 'header'){
-        say STDOUT $resp->{headers}{lc $action->{value}};
+        say $current_output $resp->{headers}{lc $action->{value}};
     } elsif ($action->{what} eq 'json'){
         json_action($action, $url, $resp);
     } elsif ($action->{what} eq 'xml'){
         xml_action($action, $url, $resp);
     } elsif ($action->{what} eq 'bodyrx'){
         if (${$resp->{captured}} =~ /$action->{value}/){
-            say STDOUT $&;
+            say $current_output $&;
         }
     } elsif ($action->{what} eq 'listlinks'){
         unless ($resp->{captured} && ${$resp->{captured}}){
@@ -1502,7 +1505,7 @@ sub perform_action {
             return;
         }
         my @url = discover_links($resp, $url, $action->{value}, undef, 0);
-        say STDOUT $_ for @url;
+        say $current_output $_ for @url;
     } elsif (index($action->{what}, 'getlinked') == 0 && !$action->{done}){
         my @refs = getlinked_action($action, $url, $resp);
         push @$discovered_links, @refs;
@@ -1519,7 +1522,7 @@ sub json_action {
         # say Dumper $js;
         my $jp = $action->{value};
         my $jval = get_jpath($hash, $jp) // '<null>'; # if undef value, stringify to avoid message
-        say STDOUT (ref $jval ? to_json($jval) : $jval); 
+        say $current_output (ref $jval ? to_json($jval) : $jval); 
     } else {
         say STDERR "Request did not returned a valid JSON for an action.";
         exit 8;
@@ -1537,7 +1540,7 @@ sub xml_action {
             # say Dumper $js;
             my $jp = $action->{value};
             my $jval = get_jpath($hash, $jp);
-            say STDOUT (ref $jval ? xmlify($jval, $treepp) : $jval);
+            say $current_output (ref $jval ? xmlify($jval, $treepp) : $jval);
         } else {
             say STDERR "Request did not returned a valid XML for an action.";
             exit 9;
