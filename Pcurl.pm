@@ -257,12 +257,6 @@ if ($args{accept}){
     push @{$args{header}}, "Accept: $args{accept}";
 }
 
-# Action is either a specific value to extract from the result (header, json field)
-# an can be more sophisticated actions
-if ($args{action}){
-    $process_action = parse_process_action($args{action});
-}
-
 my $cli_url = $args{url} || $ARGV[0];
 unless ($cli_url){
     say STDERR "No url provided...";
@@ -314,6 +308,13 @@ if ($args{'cookie-jar'}){
 }
 
 # ------- End of main prog ---------------------------------------------------------------
+
+# TODO this need a refactor to pass arguments to process_http
+sub simulate_cli_settings {
+    my %params = @_;
+
+    %args = (%args, %params);
+}
 
 sub process_loop {
     my ($request_list, $level) = @_;
@@ -406,6 +407,7 @@ sub process_loop {
     # if we need to process a next level of links in recursive crawler mode
     # call us recursively TODO: maybe we could just push in $request_list and return to loop
     #                                               instead of recurse using a doouble while
+    # FIXME: $process_action has been changed by side-effect of process_http()
     if ($args{recursive} || $process_action && index($process_action->{what}, 'getlinked')==0
         && @discovered_at_this_level
         && (
@@ -454,8 +456,8 @@ sub restore_output {
         $is_out_redirected = 0;
     }
 }
-# ---------------------------------------------------------------------------------
 
+# parse uri and print message if unsuccessful
 sub validate_uri {
     my $uri = shift;
     my $parsed = parse_uri($uri);
@@ -465,6 +467,7 @@ sub validate_uri {
     return $parsed;
 }
 
+# perform an HTTP[S] request / response
 sub process_http {
     my %params = @_;
     
@@ -476,6 +479,12 @@ sub process_http {
 
     $max_redirs = $args{'max-redirs'} if defined $args{'max-redirs'};
     my $redirs = $max_redirs;   # redirs is a countdown of remaining allowed redirections
+
+    # Action is either a specific value to extract from the result (header, json field)
+    # an can be more sophisticated actions
+    if ($args{action}){
+        $process_action = parse_process_action($args{action});
+    }
 
     # set the filename for output when redirecting or using url name
     my $fname;
@@ -669,7 +678,7 @@ sub process_http {
                 # result other than redirect
                 if ($process_action){
                     if (!$process_action->{done}){
-                        perform_action($process_action, $url_final, $resp, $discovered_links);
+                        perform_action($process_action, $url_final, $resp, $discovered_links, $params{capture} == 1);
                         $process_action->{done} = 1;
                     }
                 } elsif ($resp->{headers}{'content-type'} && $resp->{headers}{'content-type'} =~ '(text/html|text/css)'){
@@ -713,6 +722,7 @@ sub process_http {
     return $resp;
 }
 
+# perform a file:// query
 sub process_file {
     my $url = shift;
     my $discovered_links = shift;
@@ -1487,17 +1497,27 @@ sub parse_process_action {
 
 # Do something with the retrieved resource
 sub perform_action {
-    my ($action, $url, $resp, $discovered_links) = @_;
+    my ($action, $url, $resp, $discovered_links, $store_result) = @_;
 
     if ($action->{what} eq 'header'){
-        say $current_output $resp->{headers}{lc $action->{value}};
+        my $res = $resp->{headers}{lc $action->{value}};
+        if ($store_result){
+            $resp->{action_result} = $res; 
+        } else {
+            say $current_output $res;
+        }
     } elsif ($action->{what} eq 'json'){
-        json_action($action, $url, $resp);
+        json_action($action, $url, $resp, $store_result);
     } elsif ($action->{what} eq 'xml'){
-        xml_action($action, $url, $resp);
+        xml_action($action, $url, $resp, $store_result);
     } elsif ($action->{what} eq 'bodyrx'){
         if (${$resp->{captured}} =~ /$action->{value}/){
-            say $current_output $&;
+            my $res = $&;
+            if ($store_result){
+                $resp->{action_result} = $res;
+            } else {
+                say $current_output $res;
+            }
         }
     } elsif ($action->{what} eq 'listlinks'){
         unless ($resp->{captured} && ${$resp->{captured}}){
@@ -1516,13 +1536,18 @@ sub perform_action {
 }
 
 sub json_action {
-    my ($action, $url, $resp) = @_;
+    my ($action, $url, $resp, $store_result) = @_;
     my $hash = from_json(${$resp->{captured}});
     if ($hash){
         # say Dumper $js;
         my $jp = $action->{value};
         my $jval = get_jpath($hash, $jp) // '<null>'; # if undef value, stringify to avoid message
-        say $current_output (ref $jval ? to_json($jval) : $jval); 
+        my $res = (ref $jval ? to_json($jval) : $jval);
+        if ($store_result){
+            $resp->{action_result} = $res;
+        } else {
+            say $current_output $res;
+        }
     } else {
         say STDERR "Request did not returned a valid JSON for an action.";
         exit 8;
@@ -1530,7 +1555,7 @@ sub json_action {
 }
 
 sub xml_action {
-    my ($action, $url, $resp) = @_;
+    my ($action, $url, $resp, $store_result) = @_;
     my $treepp = XML::TreePP->new(
         xml_decl => '',
         pretty_print => $args{'xml-pp'}
@@ -1540,7 +1565,12 @@ sub xml_action {
             # say Dumper $js;
             my $jp = $action->{value};
             my $jval = get_jpath($hash, $jp);
-            say $current_output (ref $jval ? xmlify($jval, $treepp) : $jval);
+            my $res = (ref $jval ? xmlify($jval, $treepp) : $jval);
+            if ($store_result){
+                $resp->{action_result} = $res;
+            } else {
+                say $current_output $res;
+            }
         } else {
             say STDERR "Request did not returned a valid XML for an action.";
             exit 9;
