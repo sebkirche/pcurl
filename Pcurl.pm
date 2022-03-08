@@ -1945,7 +1945,7 @@ sub to_json {
         if ($args{'json-pp'}){
             $j .= "\n" . (' ' x $indent x $level) . join(",\n" . (' ' x $indent x $level), @items) . "\n";
         } else {
-            $j .= join(',', @items) . ']';
+            $j .= join(',', @items);
         }
         $level--;
         $j .= (' ' x $indent x $level) if $args{'json-pp'};
