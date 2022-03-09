@@ -678,7 +678,7 @@ sub process_http {
                 # result other than redirect
                 if ($process_action){
                     if (!$process_action->{done}){
-                        perform_action($process_action, $url_final, $resp, $discovered_links, $params{capture} == 1);
+                        perform_action($process_action, $url_final, $resp, $discovered_links, ($params{capture} ? $params{capture} == 1 : 0));
                         $process_action->{done} = 1;
                     }
                 } elsif ($resp->{headers}{'content-type'} && $resp->{headers}{'content-type'} =~ '(text/html|text/css)'){
