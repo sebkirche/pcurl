@@ -27,7 +27,8 @@ use IO::Socket::INET;
 use IPC::Open3;
 use MIME::Base64 'encode_base64';
 use Pod::Usage;
-use Socket qw(IPPROTO_TCP TCP_NODELAY);
+use Socket qw( IPPROTO_TCP TCP_NODELAY );
+use Symbol qw( gensym );
 use Time::Local;
 # use Carp::Always;
 
@@ -55,6 +56,24 @@ sub suspend_trap {
 }
 $SIG{TSTP} = \&suspend_trap;
 $SIG{CONT} = sub { $SIG{TSTP} = \&suspend_trap; say STDERR "SIGCONT received - continue after suspension." };
+
+# the exit_hook is a hack to not terminate the program on exit() when it is called as package
+# because the code has been written initially as a program and can exit with a set of return codes
+our $do_not_terminate_on_exit = 0;
+BEGIN { 
+    sub exit_hook(;$) {
+        no warnings qw( exiting );
+        my $val = $_[0] // 0;
+        # say "exit($_[0]) called";
+        my ($package, $filename, $line, $subroutine, $hasargs, $wantarray, $evaltext, $is_require, $hints, $bitmask, $hinthash) = caller(0);
+        say "exit($val) called from $filename:$line";
+        # my $w = (caller(1))[3];
+        # say "exit($_[0]) called from $w";
+        last EXIT_OVERRIDE if $do_not_terminate_on_exit;
+        CORE::exit($_[0] // 0);
+    };
+    *CORE::GLOBAL::exit = *exit_hook;
+}
 # --------------------------------------------------
 
 my $max_redirs = 50;            # default value for maximum redirects to follow
@@ -69,8 +88,9 @@ my $default_page = 'index.html'; # default name for directory index
 
 # when writing output in a file, holder of the initial STDOUT
 # my $STDOLD;
-my $current_output;
-my $is_out_redirected = 0;
+my @output_stack = ( *STDOUT );
+# my $current_output = $output_stack[0];
+# my $is_out_redirected = 0;
 
 my ($http_vers, $tunnel_pid, $auto_ref, $use_cookies, $cookies, $process_action);
 my %rel_url_to_local_dir;
@@ -408,7 +428,7 @@ sub process_loop {
     # call us recursively TODO: maybe we could just push in $request_list and return to loop
     #                                               instead of recurse using a doouble while
     # FIXME: $process_action has been changed by side-effect of process_http()
-    if ($args{recursive} || $process_action && index($process_action->{what}, 'getlinked')==0
+    if (($args{recursive} || $process_action && index($process_action->{what}, 'getlinked')==0)
         && @discovered_at_this_level
         && (
             $level > 0
@@ -417,7 +437,7 @@ sub process_loop {
         ){
         say STDERR "* processing next level" if $args{verbose} || $args{debug};
         my $next_level;
-        if ($args{level} && $args{level} > 0){
+        if (defined $args{level} && $args{level} > 0){
             $next_level = $level - 1;
         } else {
             $next_level = 1;
@@ -433,27 +453,39 @@ sub prefix_print {
     }
 }
 
+sub current_output {
+    return $output_stack[$#output_stack];
+}
+
 # redirect STDOUT to a file
 # unless the out name is '-' to allow binary output to STDOUT
 sub redirect_output_to_file {
     my $out_name = shift;
-    if (!$is_out_redirected && $out_name && $out_name ne '-'){
+    # say STDERR "redirect -> $out_name";
+    if ($out_name && $out_name ne '-'){
         # open $STDOLD, '>&', STDOUT;
-        open $current_output, '>', $out_name or die "Cannot open $out_name for output.";
+        my $new_fd = gensym();
+        open $new_fd, '>', $out_name or die "Cannot open $out_name for output.";
+        push @output_stack, $new_fd;
         # binmode(STDOUT, ":raw");
         # later, to restore STDOUT:
         # open (STDOUT, '>&', $STDOLD);
-        $is_out_redirected = 1;
+        # $is_out_redirected = 1;
+        # say STDERR "output is " . current_output;
     }
 }
 
 # close out file and restore STDOUT
 sub restore_output {
-    my $out_name = $args{output};
-    if ($is_out_redirected && fileno($current_output) != fileno(STDOUT)){
-        close $current_output;
+    # my $out_name = $args{output};
+    # if ($is_out_redirected && (defined fileno($current_output) && fileno($current_output) != fileno(STDOUT))){
+    if (scalar @output_stack > 1){
+        close current_output();
         # open (STDOUT, '>&', $STDOLD);
-        $is_out_redirected = 0;
+        # $current_output = *STDOUT;
+        # $is_out_redirected = 0;
+        pop @output_stack;
+        # say STDERR "restore_output to " . current_output;
     }
 }
 
@@ -483,7 +515,9 @@ sub process_http {
     # Action is either a specific value to extract from the result (header, json field)
     # an can be more sophisticated actions
     if ($args{action}){
+        # FIXME: bad, bad, bad: should not use that global var anymore
         $process_action = parse_process_action($args{action});
+        $process_action->{done} = undef;
     }
 
     # set the filename for output when redirecting or using url name
@@ -550,15 +584,16 @@ sub process_http {
             redirect_output_to_file($out_file);
         } else {
             # not recursive
-            if ($fname eq '-'){
-                $current_output = *STDOUT;
-            } else {
+            # if ($fname eq '-'){
+                # $current_output = *STDOUT;
+            # } else {
+            if ($fname ne '-'){
                 $out_file = "${prefix}${fname}";
                 redirect_output_to_file($out_file);
             }
         }
-    } else {
-        $current_output = *STDOUT;
+    # } else {
+        # $current_output = *STDOUT;
     }
     
     do {
@@ -607,7 +642,8 @@ sub process_http {
         # Write to the server
         send_http_request($IN, $OUT, $ERR, $headers, $body);
         
-        # for some actions we need to capure the output into a variable
+        # for some actions we need to capture the output into a variable
+        # also an external caller could want the output saved in the $resp object
         my $need_capture = defined $process_action && !$process_action->{done} || $params{capture}; # && $process_action->{action} eq 'grep';
 
         # Receive the response
@@ -639,6 +675,7 @@ sub process_http {
                                    canonicalize($loc));
                 }
                 $url_final = parse_uri($loc);
+                $url_final = complete_url_default_values($url_final); # is this correct??
                 # FIXME: in case of local schemeless url...  <=======
                 # relative redirect urls may miss some parameters
                 if (($url_final->{scheme} ne $old_scheme) || ($url_final->{host} ne $old_host) || ($url_final->{port} != $old_port)){
@@ -688,14 +725,18 @@ sub process_http {
                 }                                   
 
                 # save eventually the captured data into a file for getlinked or recursive
-                #if ($resp->{captured}
-                #    && (
-                #        ($process_action && index($process_action->{what}, 'getlinked') == 0)
-                #        ||
-                #        $args{recursive}
-                #    )){
-                #    say STDOUT ${$resp->{captured}} if defined ${$resp->{captured}};
-                #}
+                if ($resp->{captured}
+                   && (
+                       ($process_action && index($process_action->{what}, 'getlinked') == 0)
+                       ||
+                       $args{recursive}
+                    )){
+                    # need to use select as "print current_output ${$resp->{captured}}" prints "GLOB(0x1f75cd8)" (the current_output) to STDOUT
+                    my $old_selected = select current_output;
+                    # say STDERR "output is " . current_output;
+                    print ${$resp->{captured}}; #if defined ${$resp->{captured}};
+                    select $old_selected;
+                }
 
                 goto BREAK;         # weird, 'last' is throwing a warning "Exiting subroutine via last"
             }
@@ -754,7 +795,7 @@ sub process_file {
             my $success = read($fh, $buf, 1024, length($buf));
             die $! if not defined $success;
             last if not $success;
-            print $current_output $buf;
+            print current_output $buf;
         }
         close $fh;
     }
@@ -772,7 +813,7 @@ sub send_http_request {
 
     my $headers_txt = join "", map { "$_\r\n" } @$headers;
     print $OUT $headers_txt;    # send headers to server
-    print $current_output $headers_txt if $args{'include-request'};
+    print current_output $headers_txt if $args{'include-request'};
 
     if (defined $body){
         my $sent = 0;
@@ -1045,16 +1086,19 @@ sub process_http_response {
     my $content_length = 0;     # size of response, according to the response header
     my %headers;                # a map for all received headers
     my %resp;                   # response meta-data
-    my $resp_buf;                # buffer to store response instead of STDOUT/file
+    my $resp_buf;               # buffer to store response instead of STDOUT/file
 
-    my $out;
+    my $out;                    # we print in $out that can be a file or STDOUT
+    # my $old_out;                # for actions & recursive mode we need to redirect to memory, this will keep previous $out
     # when we receive the server response, we print the result to STDOUT (and possibly the headers)
     # but when we need to process actions (e.g. for pattern matching) we capture output to a memory buffer
     if ($need_capture){
-        open($out, '>', \$resp_buf) or die "Cannot capture output: $!";
-    } else {
-        $out = $current_output;
+        # open($out, '>', \$resp_buf) or die "Cannot capture output: $!"; # out is a variable
+        redirect_output_to_file(\$resp_buf);
+    # } else {
+        # $out = $current_output; # open file or STDOUT
     }
+    $out = current_output();
     my $selector = IO::Select->new();
     $selector->add($ERR) if $ERR;
     $selector->add($IN);
@@ -1166,7 +1210,11 @@ NO_BIN
                             exit 10;
                         }
                     } elsif ($args{recursive} && $headers{'content-type'} =~ m{(text/html|text/css)}){
-                        open $out, '>', \$resp_buf or die "Cannot capture output: $!";
+                        # $old_out = $out;
+                        # $out = gensym(); # allocate a new "variable" usable to store a fh
+                        # open $out, '>', \$resp_buf or die "Cannot capture output: $!";
+                        redirect_output_to_file(\$resp_buf);
+                        $out = current_output();
                         $need_capture = 1;
                     }
                 }
@@ -1258,7 +1306,10 @@ NO_BIN
     if ($need_capture){
         # restore the output to the original value before capture
         say STDERR sprintf("* Captured %d bytes:\n%s", length $resp_buf, $resp_buf // '') if $args{debug};
-        close $out;
+        # close $out;
+        # $out = $old_out;
+        restore_output();
+        $out = current_output();
         $resp{captured} = \$resp_buf;
     }
 
@@ -1504,7 +1555,7 @@ sub perform_action {
         if ($store_result){
             $resp->{action_result} = $res; 
         } else {
-            say $current_output $res;
+            say current_output $res;
         }
     } elsif ($action->{what} eq 'json'){
         json_action($action, $url, $resp, $store_result);
@@ -1516,7 +1567,7 @@ sub perform_action {
             if ($store_result){
                 $resp->{action_result} = $res;
             } else {
-                say $current_output $res;
+                say current_output $res;
             }
         }
     } elsif ($action->{what} eq 'listlinks'){
@@ -1525,7 +1576,7 @@ sub perform_action {
             return;
         }
         my @url = discover_links($resp, $url, $action->{value}, undef, 0);
-        say $current_output $_ for @url;
+        say current_output $_ for @url;
     } elsif (index($action->{what}, 'getlinked') == 0 && !$action->{done}){
         my @refs = getlinked_action($action, $url, $resp);
         push @$discovered_links, @refs;
@@ -1546,7 +1597,7 @@ sub json_action {
         if ($store_result){
             $resp->{action_result} = $res;
         } else {
-            say $current_output $res;
+            say current_output $res;
         }
     } else {
         say STDERR "Request did not returned a valid JSON for an action.";
@@ -1569,7 +1620,7 @@ sub xml_action {
             if ($store_result){
                 $resp->{action_result} = $res;
             } else {
-                say $current_output $res;
+                say current_output $res;
             }
         } else {
             say STDERR "Request did not returned a valid XML for an action.";
@@ -1616,6 +1667,7 @@ sub discover_links {
     # say for @reqs;
     my @discovered_urls;
     my %dups;
+  RES:
     for my $r (@reqs){          # build the list of urls from the anchors/hrefs
 
         # fix URLs when scheme is missing
@@ -1625,79 +1677,96 @@ sub discover_links {
 
         # remove fragment (avoid duplicates)
         $r =~ s/#.*$//;
-        
-        next if $dups{$r};        # avoid multiple downloads
-        next if $r =~ /^mailto:/; # avoid mail links
-        next if $r =~ /^news:/;   # avoid news links
+
+        next RES unless $r;           # url without fragment is empty
+        next RES if $dups{$r};        # avoid multiple downloads
+        next RES if $r =~ /^mailto:/; # avoid mail links
+        next RES if $r =~ /^news:/;   # avoid news links
 
         $dups{$r}++;
         my $local_dest = '';
         if ($r =~ /^https?:/){
             # arbitrary fully qualified url
             my $linked = parse_uri($r);
-            if (!$linked->{host}
-                || $linked->{host} eq $url->{host}
-                || $args{'span-hosts'}){
-                push @discovered_urls, $r;
-            }
-        } else {
-            my $p;
-            my $parent_dir = '';
-            $parent_dir = $url->{path} =~ s{[^/]*$}{}r;
-            # we want either links with tree structure (keep_tree), or not
-            if (!$keep_tree){
-                # remove path to retrieve all in flat directory
-                $local_dest = $r =~ s{^.*/}{}r;
-            } else {
-                # we keep the tree structure
-                if ($r =~ m{^/}){
-                    next if $args{relative}; # ignore if we want only relative links
-                    $local_dest = $r;
-                } else {
-                    if ($parent_dir){
-                        $local_dest = "$parent_dir$r";
-                    } else {
-                        $local_dest = $r;
-                    }
+            if (
+                # !$linked->{host} # ??
+                $linked->{host} ne $url->{host}){
+                if ($args{'span-hosts'}){
+                    push @discovered_urls, $r;
                 }
-            }
-            $local_dest =~ s{^/}{};
-            # $local_dest =~ s/%20/ /g; # FIXME: do not decode urls
-                                        # and remove the fragment
-            if ($r =~ m{^/}){
-               # absolute local url, use it instead of current path + link
-                $p = $r;
+                next RES;
             } else {
-                # relative local url, add to the current path
-                $p = "$parent_dir$r";
-            }
-            # avoid getting too much of a site if unwanted
-            my $canon = canonicalize($p);
-            my $current_path = canonicalize($url->{path});
-            $current_path =~ s{[^/]*$}{};
-            if ($args{'page-requisites'} && $requisites{$r}){
-                # nothing special
-            } elsif (!is_descendant_or_equal($canon, $current_path) && $args{'no-parent'}){
-                next;
-            }
-                
-            $p = $canon;
-            my $user_info = auth_string($url);
-            my $authority = $url->{host};
-            $authority = $user_info . $authority if $user_info;
-            $authority .= sprintf(":%s", $url->{port}) if $url->{port} != $defports{$url->{scheme}};
-            my $u = sprintf("%s://%s%s",
-                            $url->{scheme},
-                            $authority,
-                            $p);
-            
-            $rel_url_to_local_dir{$u} = $local_dest if $local_dest; # store the local relative path
-            unless(exists $discovered_url{$u}){
-                # say STDERR "* adding $u to discoverd urls" if $args{verbose} || $args{debug};
-                push @discovered_urls, $u;
-                $discovered_url{$u}++;
+                # it is an absolute url on the same server
+                complete_url_default_values($linked);
+                if ($linked->{scheme} eq $url->{scheme}
+                    && $linked->{port} eq $url->{port}){
+                    # if same scheme and port, just use the path
+                    $r = $linked->{path};
+                } else {
+                    # consider it needs a different connection
+                    push @discovered_urls, $r;
+                    next RES;
+                }   
             }
         }
+        
+        my $p;
+        my $parent_dir = '';
+        $parent_dir = $url->{path} =~ s{[^/]*$}{}r;
+        # we want either links with tree structure (keep_tree), or not
+        if (!$keep_tree){
+            # remove path to retrieve all in flat directory
+            $local_dest = $r =~ s{^.*/}{}r;
+        } else {
+            # we keep the tree structure
+            if ($r =~ m{^/}){
+                next if $args{relative}; # ignore if we want only relative links
+                $local_dest = $r;
+            } else {
+                if ($parent_dir){
+                    $local_dest = "$parent_dir$r";
+                } else {
+                    $local_dest = $r;
+                }
+            }
+        }
+        $local_dest =~ s{^/}{};
+        # $local_dest =~ s/%20/ /g; # FIXME: do not decode urls
+        # and remove the fragment
+        if ($r =~ m{^/}){
+            # absolute local url, use it instead of current path + link
+            $p = $r;
+        } else {
+            # relative local url, add to the current path
+            $p = "$parent_dir$r";
+        }
+        # avoid getting too much of a site if unwanted
+        my $canon = canonicalize($p);
+        my $current_path = canonicalize($url->{path});
+        $current_path =~ s{[^/]*$}{};
+        if ($args{'page-requisites'} && $requisites{$r}){
+            # nothing special
+        } elsif (!is_descendant_or_equal($canon, $current_path) && $args{'no-parent'}){
+            next;
+        }
+        
+        $p = $canon;
+        my $user_info = auth_string($url);
+        my $authority = $url->{host};
+        $authority = $user_info . $authority if $user_info;
+        $authority .= sprintf(":%s", $url->{port}) if $url->{port} != $defports{$url->{scheme}};
+        my $u = sprintf("%s://%s%s",
+                        $url->{scheme},
+                        $authority,
+                        $p);
+        
+        $rel_url_to_local_dir{$u} = $local_dest if $local_dest; # store the local relative path
+        unless(exists $discovered_url{$u}){
+            # say STDERR "* adding $u to discoverd urls" if $args{verbose} || $args{debug};
+            push @discovered_urls, $u;
+            $discovered_url{$u}++;
+        }
+        
     }
     say STDERR sprintf("Discovered %d urls:\n%s",
                        scalar(@discovered_urls),
@@ -1811,7 +1880,8 @@ sub from_json {
     # $^R is the value returned by the last runned (?{ }) block
     # $^N is the last matched group
 
-    (?&VALUE) (?{ $_ = pop_val() }) # <== entry point of the parser
+    (?&VALUE)             # <== entry point of the parser
+    (?{ $_ = pop_val() }) # if the match succeeds, we assign $_ as the return value of the parser
     
     (?(DEFINE) # this does not try to match, it only defines a serie of named patterns
     
@@ -1937,6 +2007,7 @@ sub from_json {
         # we do not use $^R anymore
         # local $^R;
         eval { m{\A$rx\z}; } and $struct = $_;
+        #$DB::single = 1 unless $struct;
     }
     return $struct;
 }
@@ -2306,6 +2377,7 @@ sub parse_uri {
         };
     }
     $url->{host}     = $+{HOST};
+    # FIXME: parsing should only return port given in url (or default port corresponding to scheme)
     $url->{port}     = $args{port} || $+{PORT}; # if port given in parameter, override url port
     $url->{path}     = $+{PATH1} // $+{PATH2} // $+{PATH3} // $+{PATH4} // $+{PATH5} ;#|| '/';
     $url->{query}    = $+{QUERY};

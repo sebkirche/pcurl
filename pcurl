@@ -1,5 +1,1 @@
-#!/bin/bash
-# -*- mode: shell -*-
-# script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" &>/dev/null && pwd -P)
-script_dir=$(cd -P -- "$(dirname -- "$(realpath "$(command -v -- "$0")")" )" && pwd -P)
-perl $script_dir/Pcurl.pm $@
+Pcurl.pm
