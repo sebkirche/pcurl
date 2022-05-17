@@ -1639,14 +1639,16 @@ sub discover_links {
 
     # TODO: look only for img/css for first url, unless --page-requisites
 
-    my @links = grep { defined } ${$resp->{captured}} =~ m{(?:<a[^>]+href="?([^">]+)
-                                                           |<frame[^>]+src="([^"]+)")}gix; # dumb link collector
-    my @resources = grep { defined } ${$resp->{captured}} =~ m{
-                (?:
-                <img[^>]+src="([^"]+)"
-                |<link[^>]+href="([^"]+)"
+    my @links = grep { defined && $_ !~ /^["']$/ } ${$resp->{captured}} =~ m{
+                                                           (?|<a[^>]+href=\s*(["']?)(.+?)\1
+                                                           |<frame[^>]+src=\s*(["']?)(.+?)\1)}gix; # dumb link collector
+    say STDERR "DBG: discovered '$_'" for @links;
+    my @resources = grep { defined && $_ !~ /^["']$/ } ${$resp->{captured}} =~ m{
+                (?|
+                <img[^>]+src=\s*(["']?)(.+?)\1
+                |<link[^>]+href=\s*(["']?)(.+?)\1
                 |background-image:\s*url\(([^\)]+)\)
-                )}gx; # dumb link collector
+                )}gix; # dumb link collector
     my %requisites;
     map { $requisites{$_}++ } @resources;
     my @reqs;
