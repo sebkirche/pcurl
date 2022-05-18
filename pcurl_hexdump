@@ -1,0 +1,1 @@
+perl -I. -MPcurl=hexdump -le '{local $/;$f=<>} print for hexdump($f,32,1)' $1 
