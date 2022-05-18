@@ -133,6 +133,7 @@ my @getopt_defs = (
     'data-urlencode=s@',
     'data|data-ascii|d=s',
     'debug',
+    'debug-urls',
     'debug-json=s',
     'debug-json-export',
     'header|H=s@',
@@ -305,7 +306,7 @@ if ($args{'parse-only'}){
 }
 
 process_loop([$cli_url], $args{level} // $max_levels);
-say STDERR sprintf("* %d links processed", scalar(keys %processed_request)) if $args{summary} || $args{verbose} || $args{debug};
+say STDERR sprintf("* %d link%s processed", scalar(keys %processed_request), (scalar keys %processed_request > 1 ? 's' : '')) if $args{summary} || $args{verbose} || $args{debug};
 if ($args{summary}){
     for my $r (sort keys %processed_request){
         if ($processed_request{$r} > 1){
@@ -454,6 +455,9 @@ sub prefix_print {
 }
 
 sub current_output {
+    # my $line = [caller(0)]->[2];
+    # my $sub = [caller(1)]->[3];
+    # say STDERR "DBG: " . scalar @output_stack . " from $sub at $line";
     return $output_stack[$#output_stack];
 }
 
@@ -467,6 +471,10 @@ sub redirect_output_to_file {
         my $new_fd = gensym();
         open $new_fd, '>', $out_name or die "Cannot open $out_name for output.";
         push @output_stack, $new_fd;
+        # my $line = [caller(0)]->[2];
+        # my $sub = [caller(1)]->[3];
+        # say "DBG: redirect_output_to_file called from $sub at $line";
+        # say STDERR "DBG: output_stack++ (" . $out_name . ") " . join(' ', @output_stack);
         # binmode(STDOUT, ":raw");
         # later, to restore STDOUT:
         # open (STDOUT, '>&', $STDOLD);
@@ -485,6 +493,7 @@ sub restore_output {
         # $current_output = *STDOUT;
         # $is_out_redirected = 0;
         pop @output_stack;
+        # say STDERR "DBG: output_stack-- " . join(' ', @output_stack);
         # say STDERR "restore_output to " . current_output;
     }
 }
@@ -550,50 +559,37 @@ sub process_http {
             }
         }
     }
-    if ($fname){
+    if ($fname && $fname ne '-'){
         # process cut-dirs
-        if ($args{recursive}){
-            if ($args{'cut-dirs'}){
-                # split the path segments
-                my @path = split(m{/}, $fname);
-                my $f = pop @path;  # keep the file
-                # remove the required number of elements
-                if ($args{'recursive-flat'}){
-                    @path = ();
-                } else {
-                    for (my $i=1; $i <= $args{'cut-dirs'}; $i++){
-                        shift @path;
-                    }
-                }
-                if (@path){
-                    $fname = join('/', @path) . "/$f";
-                } else {
-                    $fname = $f;
+        if ($args{'cut-dirs'}){
+            # split the path segments
+            my @path = split(m{/}, $fname);
+            my $f = pop @path;  # keep the file
+            # remove the required number of elements
+            if ($args{'recursive-flat'}){
+                @path = ();
+            } else {
+                for (my $i=1; $i <= $args{'cut-dirs'}; $i++){
+                    shift @path;
                 }
             }
-            my $h = '';
-            unless ($args{'no-host-directories'}){
-                $h = $url_final->{host};
-                if ($url_final->{port} != $defports{$url_final->{scheme}}){
-                    $h .= ':' . $url_final->{port};
-                }
-                $h .= '/';
-            }
-            $out_file = "${prefix}${h}${fname}";
-            make_path($out_file);
-            redirect_output_to_file($out_file);
-        } else {
-            # not recursive
-            # if ($fname eq '-'){
-                # $current_output = *STDOUT;
-            # } else {
-            if ($fname ne '-'){
-                $out_file = "${prefix}${fname}";
-                redirect_output_to_file($out_file);
+            if (@path){
+                $fname = join('/', @path) . "/$f";
+            } else {
+                $fname = $f;
             }
         }
-    # } else {
-        # $current_output = *STDOUT;
+        my $h = '';
+        unless ($args{'no-host-directories'}){
+            $h = $url_final->{host};
+            if ($url_final->{port} != $defports{$url_final->{scheme}}){
+                $h .= ':' . $url_final->{port};
+            }
+            $h .= '/';
+        }
+        $out_file = "${prefix}${h}${fname}";
+        make_path($out_file);
+        redirect_output_to_file($out_file);
     }
     
     do {
@@ -732,10 +728,10 @@ sub process_http {
                        $args{recursive}
                     )){
                     # need to use select as "print current_output ${$resp->{captured}}" prints "GLOB(0x1f75cd8)" (the current_output) to STDOUT
-                    my $old_selected = select current_output;
+                    # my $old_selected = select current_output;
                     # say STDERR "output is " . current_output;
-                    print ${$resp->{captured}}; #if defined ${$resp->{captured}};
-                    select $old_selected;
+                    print {current_output} ${$resp->{captured}}; #if defined ${$resp->{captured}};
+                    # select $old_selected;
                 }
 
                 goto BREAK;         # weird, 'last' is throwing a warning "Exiting subroutine via last"
@@ -1209,7 +1205,7 @@ curl to output it to your terminal anyway, or consider "--output
 NO_BIN
                             exit 10;
                         }
-                    } elsif ($args{recursive} && $headers{'content-type'} =~ m{(text/html|text/css)}){
+                    } elsif (!$need_capture && $args{recursive} && $headers{'content-type'} =~ m{(text/html|text/css)}){
                         # $old_out = $out;
                         # $out = gensym(); # allocate a new "variable" usable to store a fh
                         # open $out, '>', \$resp_buf or die "Cannot capture output: $!";
@@ -1281,7 +1277,7 @@ NO_BIN
                             }
                             say STDERR "* Read $block bytes" if $args{debug};
                             $received += $block;
-                            print $out $buf unless ($is_redirected && $args{location});
+                            print $out $buf unless ($is_redirected && $args{location}); # print to STDOUT or memory buffer
                         }
                     }
                     if ($chunked_mode){
@@ -1537,15 +1533,37 @@ sub parse_process_action {
             $action = { what => $type, value => $param };
         } elsif ($type eq 'xml'){
             $action = { what => $type, value => $param };
+        } elsif ($type eq 'help'){
+            list_actions();
+            exit 0;
         } else {
             say STDERR "Unknown action $type";
+            list_actions();
             exit 10;
         }
-    } # else {} parse json
+    } else {
+        list_actions();
+        exit 2;
+    }
     say STDERR "Processed action:" . Dumper $action if $args{debug};
     return $action;
 }
 
+sub list_actions {
+    say <<"ACTIONS";
+Actions are in the form type:value
+Supported actions:
+  header          return the response header 'value'
+  bodyrx          return the regex match from the response body
+  listlinks       discover the linked resource from the given URL
+  getlinked       discover all the dependencies recursively
+  getlinked-tree  discover all the dependencies recursively
+  json            return the xpath-like value from a json response
+  xml             return the xpath-like value from an xml response
+  help            this help
+ACTIONS
+}        
+    
 # Do something with the retrieved resource
 sub perform_action {
     my ($action, $url, $resp, $discovered_links, $store_result) = @_;
@@ -1576,7 +1594,7 @@ sub perform_action {
             return;
         }
         my @url = discover_links($resp, $url, $action->{value}, undef, 0);
-        say current_output $_ for @url;
+        say {current_output} $_ for @url;
     } elsif (index($action->{what}, 'getlinked') == 0 && !$action->{done}){
         my @refs = getlinked_action($action, $url, $resp);
         push @$discovered_links, @refs;
@@ -1639,16 +1657,17 @@ sub discover_links {
 
     # TODO: look only for img/css for first url, unless --page-requisites
 
-    my @links = grep { defined && $_ !~ /^["']$/ } ${$resp->{captured}} =~ m{
+    my @links = grep { defined && ! /^["']$/ } ${$resp->{captured}} =~ m{
                                                            (?|<a[^>]+href=\s*(["']?)(.+?)\1
                                                            |<frame[^>]+src=\s*(["']?)(.+?)\1)}gix; # dumb link collector
-    say STDERR "DBG: discovered '$_'" for @links;
-    my @resources = grep { defined && $_ !~ /^["']$/ } ${$resp->{captured}} =~ m{
+
+    my @resources = grep { defined && ! /^["']$/ } ${$resp->{captured}} =~ m{
                 (?|
                 <img[^>]+src=\s*(["']?)(.+?)\1
                 |<link[^>]+href=\s*(["']?)(.+?)\1
                 |background-image:\s*url\(([^\)]+)\)
                 )}gix; # dumb link collector
+
     my %requisites;
     map { $requisites{$_}++ } @resources;
     my @reqs;
@@ -1700,15 +1719,16 @@ sub discover_links {
             } else {
                 # it is an absolute url on the same server
                 complete_url_default_values($linked);
-                if ($linked->{scheme} eq $url->{scheme}
-                    && $linked->{port} eq $url->{port}){
+                # if ($linked->{scheme} eq $url->{scheme}
+                    # && $linked->{port} eq $url->{port}){
                     # if same scheme and port, just use the path
                     $r = $linked->{path};
-                } else {
+                # } else {
                     # consider it needs a different connection
-                    push @discovered_urls, $r;
-                    next RES;
-                }   
+                    # push @discovered_urls, $r;
+                    # next RES;
+                    
+                # }   
             }
         }
         
@@ -1772,7 +1792,7 @@ sub discover_links {
     }
     say STDERR sprintf("Discovered %d urls:\n%s",
                        scalar(@discovered_urls),
-                       join("\n", @discovered_urls)) if $args{verbose};
+                       join("\n", @discovered_urls)) if $args{verbose} || $args{'debug-urls'};
     # if ($args{verbose}){
         # say STDERR sprintf("%s -> %s", $_, $rel_url_to_local_dir{$_}) for keys %rel_url_to_local_dir;
     # }
