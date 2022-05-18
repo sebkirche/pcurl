@@ -1573,7 +1573,7 @@ sub perform_action {
         if ($store_result){
             $resp->{action_result} = $res; 
         } else {
-            say current_output $res;
+            say {current_output} $res;
         }
     } elsif ($action->{what} eq 'json'){
         json_action($action, $url, $resp, $store_result);
@@ -1585,7 +1585,7 @@ sub perform_action {
             if ($store_result){
                 $resp->{action_result} = $res;
             } else {
-                say current_output $res;
+                say {current_output} $res;
             }
         }
     } elsif ($action->{what} eq 'listlinks'){
@@ -1615,7 +1615,7 @@ sub json_action {
         if ($store_result){
             $resp->{action_result} = $res;
         } else {
-            say current_output $res;
+            say {current_output} $res;
         }
     } else {
         say STDERR "Request did not returned a valid JSON for an action.";
@@ -1638,7 +1638,7 @@ sub xml_action {
             if ($store_result){
                 $resp->{action_result} = $res;
             } else {
-                say current_output $res;
+                say {current_output} $res;
             }
         } else {
             say STDERR "Request did not returned a valid XML for an action.";
