@@ -580,7 +580,7 @@ sub process_http {
             }
         }
         my $h = '';
-        unless ($args{'no-host-directories'}){
+        if ($args{recursive} && !$args{'no-host-directories'}){
             $h = $url_final->{host};
             if ($url_final->{port} != $defports{$url_final->{scheme}}){
                 $h .= ':' . $url_final->{port};
