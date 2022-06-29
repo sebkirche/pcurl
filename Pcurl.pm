@@ -791,7 +791,7 @@ sub process_file {
             my $success = read($fh, $buf, 1024, length($buf));
             die $! if not defined $success;
             last if not $success;
-            print current_output $buf;
+            print {current_output} $buf;
         }
         close $fh;
     }
@@ -809,7 +809,7 @@ sub send_http_request {
 
     my $headers_txt = join "", map { "$_\r\n" } @$headers;
     print $OUT $headers_txt;    # send headers to server
-    print current_output $headers_txt if $args{'include-request'};
+    print {current_output} $headers_txt if $args{'include-request'};
 
     if (defined $body){
         my $sent = 0;
@@ -1703,6 +1703,7 @@ sub discover_links {
         next RES if $dups{$r};        # avoid multiple downloads
         next RES if $r =~ /^mailto:/; # avoid mail links
         next RES if $r =~ /^news:/;   # avoid news links
+        next RES if $r =~ /^ftp:/;    # avoid ftp links
 
         $dups{$r}++;
         my $local_dest = '';
