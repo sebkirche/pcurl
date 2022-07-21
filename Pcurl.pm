@@ -2448,7 +2448,7 @@ sub str2epoch {
     my $e = -1;
     my %months = ( Jan=>0, Feb=>1, Mar=>2, Apr=>3, May=>4, Jun=>5, Jul=>6, Aug=>7, Sep=>8, Oct=>9, Nov=>10, Dec=>11 );
     # Last-Modified: <nom-jour>, <jour> <mois> <année> <heure>:<minute>:<seconde> GMT
-    if ($s =~ /\w\w\w, (\d\d) (\w\w\w) (\d\d\d\d) (\d\d):(\d\d):(\d\d) GMT/){
+    if ($s =~ /\w\w\w, (\d?\d) (\w\w\w) (\d\d\d\d) (\d\d):(\d\d):(\d\d) GMT/){
         $e = timegm($6, $5, $4, $1, $months{$2}, $3-1900);
     } else {
         say STDERR "* FIXME: cannot interpret Last-Modified timestamp: `$s`";
