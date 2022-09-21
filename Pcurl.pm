@@ -32,7 +32,7 @@ use Symbol qw( gensym );
 use Time::Local;
 # use Carp::Always;
 
-our $VERSION = '0.9.7';
+our $VERSION = '0.9.8';
 $|++; # auto flush messages
 
 # -------- Signal handlers -------------------------
@@ -166,9 +166,13 @@ my @getopt_defs = (
     'referer|e=s',
     'request|X=s',
     'silent|s',
+    'ssl-ca|cacert=s',
+    'ssl-cert|cert=s',
+    'ssl-key|key=s',
     'sslv3|3',
     # 'stompdest=s',
     'stompmsg=s',
+    'stompread',
     'tcp-nodelay!',             # negatable: --notcp-nodelay
     'tlsv1_0|tlsv1|1',
     'tlsv1_1',
@@ -306,7 +310,7 @@ if ($args{'parse-only'}){
 }
 
 process_loop([$cli_url], $args{level} // $max_levels);
-say STDERR sprintf("* %d link%s processed", scalar(keys %processed_request), (scalar keys %processed_request > 1 ? 's' : '')) if $args{summary} || $args{verbose} || $args{debug};
+say STDERR sprintf("* %d link%s processed", scalar(keys %processed_request), (scalar keys %processed_request > 1 ? 's' : '')) if $args{recursive} && ($args{summary} || $args{verbose} || $args{debug});
 if ($args{summary}){
     for my $r (sort keys %processed_request){
         if ($processed_request{$r} > 1){
@@ -409,9 +413,9 @@ sub process_loop {
             }
             $processed_request{$req}++;
             
-        } elsif ($url->{scheme} =~ /^stomp/){
-            unless ($url->{path} && $args{stompmsg}){
-                say STDERR "Message sending with --stompmsg <message> is supported for now.";
+        } elsif ($url->{scheme} =~ /^stomp(?:\+ssl)?$/){
+            unless ($url->{path} && ($args{stompmsg} || $args{stompread})){
+                say STDERR "Message sending with --stompmsg <message> or reading with --stompread is supported for now.";
                 exit 3;
             }
             process_stomp($url);
@@ -423,6 +427,9 @@ sub process_loop {
                 exit 4;
             }
             process_file($url, \@discovered_at_this_level);
+        } else {
+            say STDERR "Unknown scheme $url->{scheme}";
+            exit 14;
         }
     }
     # if we need to process a next level of links in recursive crawler mode
@@ -1324,7 +1331,8 @@ sub get_matching_cookies {
     my @matching;
     for my $cookie (@$cookies){
         next if $cookie->{secure} && !($url->{scheme} eq 'https'); # secure cookies are only for https
-        my $dom_rx = $cookie->{domain} =~ s/\./\\./gr;
+        my $dom_rx = $cookie->{domain};
+        $dom_rx =~ s/\./\\./g;
         $dom_rx = "\\b${dom_rx}\$";
         my $path_rx = '^' . $cookie->{path} . '\b';
         if (($udomain =~ /$dom_rx/) || ($cookie->{domain} eq '*') && ($upath =~ /$path_rx/)){
@@ -1735,11 +1743,13 @@ sub discover_links {
         
         my $p;
         my $parent_dir = '';
-        $parent_dir = $url->{path} =~ s{[^/]*$}{}r;
+        $parent_dir = $url->{path};
+        $parent_dir =~ s{[^/]*$}{};
         # we want either links with tree structure (keep_tree), or not
         if (!$keep_tree){
             # remove path to retrieve all in flat directory
-            $local_dest = $r =~ s{^.*/}{}r;
+            $local_dest = $r;
+            $local_dest =~ s{^.*/}{};
         } else {
             # we keep the tree structure
             if ($r =~ m{^/}){
@@ -2246,19 +2256,60 @@ sub process_stomp {
 
     redirect_output_to_file($args{output});
 
-    ($OUT, $IN, $ERR) = connect_direct_socket($url_final->{host}, $url_final->{port});
-
-    my ($user, $passwd) = ('guest', 'guest');
-    my $connect = [ 'CONNECT', "login:${user}", "passcode:${passwd}"];
+    # ($OUT, $IN, $ERR) = connect_direct_socket($url_final->{host}, $url_final->{port});
+    ($OUT, $IN, $ERR) = connect_direct_socket($url_final->{host}, $url_final->{port}) if $url_final->{scheme} eq 'stomp';
+    ($OUT, $IN, $ERR) = connect_ssl_tunnel($url_final) if $url_final->{scheme} eq 'stomp+ssl';
+    
+    my $connect = [
+        'CONNECT',
+        # "accept-version:1.1"
+        ];
+    if ($args{basic}){
+        my ($user, $passwd) = split(/:/, $args{basic});#('guest', 'guest');
+        push @$connect, ("login:${user}", "passcode:${passwd}");
+    }
     send_stomp_request($OUT, $IN, $connect);
     $resp = process_stomp_response($IN);
-    if ($resp->{command} eq 'CONNECTED'){
-        my $body = $args{stompmsg};
-        my $len = length($body);
-        my $type = 'text/plain';
-        send_stomp_request($OUT, $IN, [ 'SEND', "destination:$url_final->{path}", "content-type:${type}", "content-length:${len}" ], $body );
-        # this is blocking...
-        $resp = process_stomp_response($IN);
+    if (keys %$resp){
+        if ($resp->{command} eq 'CONNECTED'){
+            if ($args{stompmsg}){
+                my $body = $args{stompmsg};
+                my $len = length($body);
+                my $type = 'text/plain';
+                send_stomp_request($OUT, $IN, [
+                                       'SEND',
+                                       "destination:$url_final->{path}",
+                                       "content-type:${type}",
+                                       "content-length:${len}",
+                                       # "receipt: msg42"  # if using receipt header, server will send RECEIPT response
+                                   ], $body );
+            } elsif ($args{stompread}){
+                send_stomp_request($OUT, $IN, [
+                                       'SUBSCRIBE',
+                                       "destination:$url_final->{path}",
+                                       # 'ack: client', auto | client / if client and no ACK frame, message will persist
+                                   ]);
+                $resp = process_stomp_response($IN);
+                if (keys %$resp){
+                    say "Stomp headers:" . Dumper $resp if $args{debug};
+                    say STDOUT "Message-ID:" . $resp->{headers}{'message-id'};
+                    say STDOUT "Timestamp: " . scalar localtime $resp->{headers}{timestamp} / 1000;
+                    say STDOUT "Priority: " . $resp->{headers}{priority};
+                    say STDOUT $resp->{body} || 'No body';;
+                }
+            }
+            # be gentle and tell the server we have finished
+            send_stomp_request($OUT, $IN, [ 'DISCONNECT' ]);
+            # no answer expected
+            # my $disc_resp = process_stomp_response($IN);
+            # say "Stomp headers:" . Dumper $disc_resp->{headers};
+        } else {
+            say STDERR "Unexpected STOMP response: $resp->{command}";
+            exit 13;
+        }
+    } else {
+        say STDERR "STOMP not connected.";
+        exit 13;
     }
     close $IN;
     close $OUT;
@@ -2269,10 +2320,10 @@ sub process_stomp {
 
 sub send_stomp_request {
     my ($OUT, $IN, $headers, $body) = @_;
-    if ($args{verbose}){
+    if ($args{verbose} || $args{debug}){
         say STDOUT "> $_" for @$headers;
     }
-    my $request = join( "\n", @$headers ) . "\n\n" . ($body || '') . "\000";
+    my $request = join( "\n", @$headers ) . "\n\n" . ($body || '') . "\000\n";
     print $OUT $request;
 }
 
@@ -2281,13 +2332,18 @@ sub process_stomp_response {
     my $selector = IO::Select->new();
     $selector->add($IN);
     my %frame;
-    
+
+  FRAME:
     while (my @ready = $selector->can_read($args{'max-wait'} || $def_max_wait)) {
+        last unless @ready;
         foreach my $fh (@ready) {
             if (fileno($fh) == fileno($IN)) {
                 my $buf_size = 1024 * 1024;
                 my $block = $fh->sysread(my $buf, $buf_size);
                 if($block){
+                    # if ($args{debug}){
+                    # print for unpack('(h2)*', $block);
+                    # say STDOUT for hexdump($buf) if $args{debug};
                     if ($buf =~ s/^\n*([^\n].*?)\n\n//s){
                         my $headers = $1;
                         for my $line (split /\n/,  $headers){
@@ -2303,15 +2359,21 @@ sub process_stomp_response {
                             if (length($buf) > $frame{headers}{'content-length'}){
                                 $frame{body} = substr($buf, 0, $frame{headers}{'content-length'}, '');
                             }
-                        } elsif ($buf =~ s/^(.*?)\000\n*//s ){
-                            $frame{body} = $1;
                         }
                     }
+                    if ($buf =~ s/^(.*?)\000\n*//s ){
+                        $frame{body} = $1 unless $frame{body};
+                        goto EOR;
+                        # next FRAME;
+                    } else {
+                        die;
+                    }
                 }
-                # $selector->remove($fh) if eof($fh);
+                $selector->remove($fh) if eof($fh);
             }
         }
     }
+  EOR:
     return \%frame;
 }
 
@@ -2512,7 +2574,10 @@ sub connect_ssl_tunnel {
         $phost = $proxy->{host};
         $pport = $proxy->{port};
     }
-    my $cmd = "openssl s_client -connect ${host}:${port} -servername ${host} -quiet -4";# -quiet -verify_quiet -partial_chain';
+    my $ossl_version = `openssl version`;
+    
+    my $cmd = "openssl s_client -connect ${host}:${port} -servername ${host} -quiet";# -quiet -verify_quiet -partial_chain';
+    $cmd .= ' -4' if ($ossl_version =~ /^\w+ 3/); # use IPv4 only (unsupported by OpenSSL 1.02)
     $cmd .= ' -no_check_time' if $args{insecure}; # useless?
     $cmd .= " -proxy ${phost}:${pport}" if $phost;
     $cmd .= ' -ssl3' if $args{'sslv3'};
@@ -2520,6 +2585,9 @@ sub connect_ssl_tunnel {
     $cmd .= ' -tls1_1' if $args{'tlsv1_1'};
     $cmd .= ' -tls1_2' if $args{'tlsv1_2'};
     $cmd .= ' -tls1_3' if $args{'tlsv1_3'};
+    $cmd .= " -CAfile $args{'ssl-ca'}" if $args{'ssl-ca'};
+    $cmd .= " -cert $args{'ssl-cert'}" if $args{'ssl-cert'};
+    $cmd .= " -key $args{'ssl-key'}" if $args{'ssl-key'};
     $tunnel_pid = open3(*CMD_IN, *CMD_OUT, *CMD_ERR, $cmd);
     say STDERR "* connected via OpenSSL to $host:$port" if $args{verbose} || $args{debug};
     say STDERR "* command = $cmd" if $args{debug};

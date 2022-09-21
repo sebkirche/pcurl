@@ -356,7 +356,7 @@ Return codes
 *  0 : No error.
 *  1 : no URL / wrong URL (does not parse the URL syntax).
 *  2 : unknown option.
-*  3 : url stomp:// without --stompmsg parameter.
+*  3 : url stomp:// without --stompmsg or --stompread parameter.
 *  4 : no URL / wrong URL for proxy (does not parse the URL syntax).
 *  5 : HTTP CONNECT failed for tunnel.
 *  6 : cannot access the file via file: protocol.
@@ -366,3 +366,6 @@ Return codes
 * 10 : Write error. Cannot write output.
 * 11 : http returned a temporary failure 4xx.
 * 12 : http returned a permanent failure 5xx.
+* 13 : STOMP issue.
+* 14 : unknown scheme
+
