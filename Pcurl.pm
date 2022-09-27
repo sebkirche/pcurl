@@ -997,6 +997,8 @@ sub add_http_header {
 # When POSTing data, compute length, content-type and data to POST
 sub prepare_http_body_to_post{
     my $post = $args{data} || $args{'data-binary'} || $args{'data-raw'};
+    my $buf;
+    
     if ($post){
         if ($args{'data-raw'}){
             return $args{'data-raw'}; # we do not interpret the @ in raw mode
@@ -1022,9 +1024,9 @@ sub prepare_http_body_to_post{
                     }
                 } elsif ($args{'data-binary'}){
                     my $buf_size = 1024 * 1024;
-                    while(my $block = $fd->sysread(my $buf, $buf_size)){
-                        # syswrite $OUT, $buf, $block;
-                        # $sent += $block;
+                    while(my $bytes = $fd->sysread($buf, $buf_size)){
+                        # syswrite $OUT, $buf, $bytes;
+                        # $sent += $bytes;
                         $data .= $buf;
                     }
                 }
@@ -1260,6 +1262,7 @@ NO_BIN
                 # print STDERR sprintf("%s: ", $output_name || $fname) if defined($content_length) && $args{progression} && !$args{debug};
                 my $prog = 0;   # accumulator for progression
                 my $chunk_len;
+                my $buf;
               CHUNK:
                 while (! $fh->eof){ # loop on the remaining of response
                     if ($chunked_mode){
@@ -1272,18 +1275,18 @@ NO_BIN
                     }
                     my $buf_size = $chunked_mode ? $chunk_len : (2 * 1024 * 1024);
                     if ($buf_size){
-                        my $block = $fh->read(my $buf, $buf_size);
-                        if ($block){
+                        my $bytes = $fh->read($buf, $buf_size);
+                        if ($bytes){
                             if (defined($content_length) && $args{progression} && !$args{debug}){
                                 my $BAR_LENGTH = 72;
-                                $prog += $block;
+                                $prog += $bytes;
                                 my $pchars = $BAR_LENGTH / $content_length * $prog;
                                 my $pct = 100 / $content_length * $prog;
                                 print STDERR sprintf("\r%s: %s%s %.1f%%", $output_name || $fname, '#' x int($pchars), '.' x ($BAR_LENGTH - int($pchars)), $pct);
                                 flush STDERR;
                             }
-                            say STDERR "* Read $block bytes" if $args{debug};
-                            $received += $block;
+                            say STDERR "* Read $bytes bytes" if $args{debug};
+                            $received += $bytes;
                             print $out $buf unless ($is_redirected && $args{location}); # print to STDOUT or memory buffer
                         }
                     }
@@ -2259,19 +2262,21 @@ sub process_stomp {
     # ($OUT, $IN, $ERR) = connect_direct_socket($url_final->{host}, $url_final->{port});
     ($OUT, $IN, $ERR) = connect_direct_socket($url_final->{host}, $url_final->{port}) if $url_final->{scheme} eq 'stomp';
     ($OUT, $IN, $ERR) = connect_ssl_tunnel($url_final) if $url_final->{scheme} eq 'stomp+ssl';
+
+    my $USE_ACK = 1;
     
     my $connect = [
         'CONNECT',
         # "accept-version:1.1"
         ];
     if ($args{basic}){
-        my ($user, $passwd) = split(/:/, $args{basic});#('guest', 'guest');
+        my ($user, $passwd) = split(/:/, $args{basic});
         push @$connect, ("login:${user}", "passcode:${passwd}");
     }
     send_stomp_request($OUT, $IN, $connect);
-    $resp = process_stomp_response($IN);
-    if (keys %$resp){
-        if ($resp->{command} eq 'CONNECTED'){
+    $resp = process_stomp_response($IN, $args{'max-wait'} || $def_max_wait);
+    if (keys %{$resp->[0]}){
+        if ($resp->[0]->{command} eq 'CONNECTED'){
             if ($args{stompmsg}){
                 my $body = $args{stompmsg};
                 my $len = length($body);
@@ -2288,19 +2293,31 @@ sub process_stomp {
                                        'SUBSCRIBE',
                                        "destination:$url_final->{path}",
                                        # 'ack: client', auto | client / if client and no ACK frame, message will persist
+                                       sprintf('ack:%s', $USE_ACK ? 'client' : 'auto')
                                    ]);
-                $resp = process_stomp_response($IN);
-                if (keys %$resp){
-                    say "Stomp headers:" . Dumper $resp if $args{debug};
-                    say STDOUT "Message-ID:" . $resp->{headers}{'message-id'};
-                    say STDOUT "Timestamp: " . scalar localtime $resp->{headers}{timestamp} / 1000;
-                    say STDOUT "Priority: " . $resp->{headers}{priority};
-                    say STDOUT $resp->{body} || 'No body';;
+                $resp = process_stomp_response($IN, 1);
+                for my $frame (@$resp){
+                    if (keys %$frame && $frame->{command} eq 'MESSAGE'){
+                        say "Stomp headers:" . Dumper $frame if $args{debug};
+                        say STDOUT "Message-ID:" . $frame->{headers}{'message-id'};
+                        say STDOUT "Timestamp: " . scalar localtime $frame->{headers}{timestamp} / 1000;
+                        say STDOUT "Priority: " . $frame->{headers}{priority};
+                        say STDOUT $frame->{body} || 'No body';;
+                        if ($USE_ACK){
+                            my $mid = $frame->{headers}{'message-id'};
+                            $mid =~ s/message-id:\s*//;
+                            send_stomp_request($OUT, $IN, [
+                                                   'ACK',
+                                                   "message-id:$mid",
+                                               ]);
+                        }
+                    }
                 }
             }
             # be gentle and tell the server we have finished
             send_stomp_request($OUT, $IN, [ 'DISCONNECT' ]);
             # no answer expected
+            
             # my $disc_resp = process_stomp_response($IN);
             # say "Stomp headers:" . Dumper $disc_resp->{headers};
         } else {
@@ -2329,52 +2346,67 @@ sub send_stomp_request {
 
 sub process_stomp_response {
     my $IN = shift;
+    my $timeout = shift;
+
+    my $resp = [];
+    my $buf;                    # allocate the buffer once and not in loop - thanks Ikegami!
+    my $buf_size = 1024 * 1024;
+
     my $selector = IO::Select->new();
     $selector->add($IN);
-    my %frame;
-
   FRAME:
-    while (my @ready = $selector->can_read($args{'max-wait'} || $def_max_wait)) {
-        last unless @ready;
+    while (1){
+        my @ready = $selector->can_read($timeout);
+        last FRAME unless @ready;     # empty array = timed-out
         foreach my $fh (@ready) {
             if (fileno($fh) == fileno($IN)) {
-                my $buf_size = 1024 * 1024;
-                my $block = $fh->sysread(my $buf, $buf_size);
-                if($block){
-                    # if ($args{debug}){
-                    # print for unpack('(h2)*', $block);
-                    # say STDOUT for hexdump($buf) if $args{debug};
-                    if ($buf =~ s/^\n*([^\n].*?)\n\n//s){
-                        my $headers = $1;
-                        for my $line (split /\n/,  $headers){
-                            say STDOUT "< $line" if $args{verbose} || $args{debug};
-                            if ($line =~ /^(\w+)$/){
-                                $frame{command} = $1;
+                my $bytes = $fh->sysread($buf, $buf_size);
+                # if bytes undef -> error, if 0 -> eof, else number of read bytes
+                my %frame;
+                if (defined $bytes){
+                    if($bytes){
+                        # if ($args{debug}){
+                        # print for unpack('(h2)*', $buf);
+                        # say STDOUT for hexdump($buf) if $args{debug};
+                        if ($buf =~ s/^\n*([^\n].*?)\n\n//s){
+                            my $headers = $1;
+                            for my $line (split /\n/,  $headers){
+                                say STDOUT "< $line" if $args{verbose} || $args{debug};
+                                if ($line =~ /^(\w+)$/){
+                                    $frame{command} = $1;
+                                }
+                                if ($line =~ /^([^:]+):(.*)$/){
+                                    $frame{headers}{$1} = $2;
+                                }
                             }
-                            if ($line =~ /^([^:]+):(.*)$/){
-                                $frame{headers}{$1} = $2;
+                            if ($frame{headers}{'content-length'}){
+                                if (length($buf) > $frame{headers}{'content-length'}){
+                                    $frame{body} = substr($buf, 0, $frame{headers}{'content-length'}, '');
+                                }
                             }
                         }
-                        if ($frame{headers}{'content-length'}){
-                            if (length($buf) > $frame{headers}{'content-length'}){
-                                $frame{body} = substr($buf, 0, $frame{headers}{'content-length'}, '');
-                            }
+                        if ($buf =~ s/^(.*?)\000\n*//s ){
+                            $frame{body} = $1 unless $frame{body};
+                            push @$resp, \%frame;
+                            $timeout = 0.1; # for next read short timeout
+                            next FRAME;
+                        } else {
+                            die;
                         }
-                    }
-                    if ($buf =~ s/^(.*?)\000\n*//s ){
-                        $frame{body} = $1 unless $frame{body};
-                        goto EOR;
-                        # next FRAME;
                     } else {
-                        die;
+                        $selector->remove($fh); # EOF
+                        last FRAME;
                     }
+                } else {
+                    # something is wrong
+                    say STDERR "Error reading STOMP response: $!";
                 }
-                $selector->remove($fh) if eof($fh);
+            } else {
+                # what? not the given fh
             }
         }
     }
-  EOR:
-    return \%frame;
+    return $resp;
 }
 
 # Extract the differents parts from an URL
