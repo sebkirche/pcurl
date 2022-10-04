@@ -1669,8 +1669,8 @@ sub discover_links {
     # TODO: look only for img/css for first url, unless --page-requisites
 
     my @links = grep { defined && ! /^["']$/ } ${$resp->{captured}} =~ m{
-                                                           (?|<a[^>]+href=\s*(["']?)(.+?)\1
-                                                           |<frame[^>]+src=\s*(["']?)(.+?)\1)}gix; # dumb link collector
+                                                           (?|<a[^>]+href\s*=\s*(["']?)(.+?)\1
+                                                           |<frame[^>]+src\s*=\s*(["']?)(.+?)\1)}gix; # dumb link collector
 
     my @resources = grep { defined && ! /^["']$/ } ${$resp->{captured}} =~ m{
                 (?|
