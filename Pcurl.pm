@@ -221,6 +221,10 @@ GetOptions(\%args, @getopt_defs ) or pod2usage(-exitval => 2, -verbose => 0);
 pod2usage(-exitval => 0, -verbose => 1) if $args{help};
 pod2usage(-exitval => 0, -verbose => 2) if $args{man};
 
+if ($args{action} && $args{action} eq 'help:'){
+    parse_process_action($args{action}); # will exit
+}
+
 if ($args{version}){
     say "pcurl $VERSION";
     exit 0;
