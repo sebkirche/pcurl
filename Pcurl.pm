@@ -263,6 +263,7 @@ if ($args{referer} && $args{referer} =~ /([^;]*)?;auto/){
 if ($args{cookie} || $args{'cookie-jar'}){
     $use_cookies = 1;
     if ($args{cookie}){
+        # parameter is either a file name or a literal cookie
         if (-f $args{cookie}){
             $cookies = load_cookie_jar($args{cookie});
             say STDERR "Cookies from jar:", Dumper $cookies if $args{debug};
@@ -1342,7 +1343,7 @@ sub get_matching_cookies {
         $dom_rx =~ s/\./\\./g;
         $dom_rx = "\\b${dom_rx}\$";
         my $path_rx = '^' . $cookie->{path} . '\b';
-        if (($udomain =~ /$dom_rx/) || ($cookie->{domain} eq '*') && ($upath =~ /$path_rx/)){
+        if ((($cookie->{domain} eq '*') || ($udomain =~ /$dom_rx/)) && ($upath =~ /$path_rx/)){
             push @matching, $cookie;
         }
     }
@@ -1509,7 +1510,7 @@ sub save_cookie_jar {
     } else {
         open $out, '>', $file or do { say STDERR "* WARNING: failed to save cookies in $file"; return}; # emulate curl
     }
-    my $uagent = $args{'use-agent'};
+    my $uagent = $args{'user-agent'};
     print $out <<HEADER;
 # Netscape HTTP Cookie File
 # https://curl.haxx.se/docs/http-cookies.html
