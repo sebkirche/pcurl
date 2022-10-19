@@ -413,7 +413,10 @@ sub process_loop {
                                      discovered => ($level ||
                                                     (defined $args{level} && $args{level} == 0)) ? \@discovered_at_this_level : undef
                     );
-                $failed_url{$req} = $r->{status}{code} if $r->{status}{code} >= 400 && $r->{status}{code} <= 599;
+
+                # response might be undef after timeout
+                $failed_url{$req} = $r->{status}{code} if defined $r->{status} && $r->{status}{code} >= 400 && $r->{status}{code} <= 599;
+
                 say STDERR sprintf("%s -> %s", $url->{url}, humanize_bytes($r->{byte_len})) if $r->{byte_len} && ($args{progression} || $args{verbose} || $args{debug});
             }
             $processed_request{$req}++;
