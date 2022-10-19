@@ -330,10 +330,6 @@ if ($args{summary}){
     say STDERR "$_ -> $failed_url{$_}" for sort keys %failed_url;
 }
 
-# save the cookie jar if requested
-if ($args{'cookie-jar'}){
-    save_cookie_jar($args{'cookie-jar'}, $cookies);
-}
 
 }
 
@@ -413,10 +409,9 @@ sub process_loop {
                                      discovered => ($level ||
                                                     (defined $args{level} && $args{level} == 0)) ? \@discovered_at_this_level : undef
                     );
-
                 # response might be undef after timeout
                 $failed_url{$req} = $r->{status}{code} if defined $r->{status} && $r->{status}{code} >= 400 && $r->{status}{code} <= 599;
-
+                    
                 say STDERR sprintf("%s -> %s", $url->{url}, humanize_bytes($r->{byte_len})) if $r->{byte_len} && ($args{progression} || $args{verbose} || $args{debug});
             }
             $processed_request{$req}++;
@@ -717,7 +712,7 @@ sub process_http {
                     unlink $out_file;
                 }
                 unless (defined $args{recursive}){
-                    # we do not want to crawl
+                    # we are not in crawling mode
                     $error_code = 11 if $code >= 400 && $code <= 499;
                     $error_code = 12 if $code >= 500 && $code <= 599;
                 }
@@ -768,6 +763,11 @@ sub process_http {
     close $IN;
     close $OUT;
     close $ERR if $ERR;
+
+    # save the cookie jar if requested
+    if ($args{'cookie-jar'}){
+        save_cookie_jar($args{'cookie-jar'}, $cookies);
+    }
 
     exit $error_code if $error_code;
     
@@ -1506,7 +1506,7 @@ sub load_cookie_jar {
 sub save_cookie_jar {
     my ($file, $cookies) = @_;
     return unless @$cookies; # emulate curl: do nothing if encountered no cookie
-    say STDERR scalar(@$cookies) . " cookie(s) to save in cookie-jar '$file'" if $args{verbose} or $args{debug};
+    say STDERR '* ' . scalar(@$cookies) . " cookie(s) to save in cookie-jar '$file'" if $args{verbose} or $args{debug};
     my $out;
     if ($file eq '-'){
         $out = *STDOUT;
@@ -2424,6 +2424,13 @@ sub parse_uri {
     my $given = shift;
     unless( $given =~ qr{^
         # See RFC3986 - URI Generic Syntax
+        #     foo://example.com:8042/over/there?name=ferret#nose
+        #     \_/   \______________/\_________/ \_________/ \__/
+        #      |           |            |            |        |
+        #   scheme     authority       path        query   fragment
+        #      |   _____________________|__
+        #     / \ /                        \
+        #     urn:example:animal:ferret:nose
 
         (?: (?<SCHEME> (?&SCHEME_ELEMS)) : )
         (?:  # HIERARCHICAL PART
