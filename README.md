@@ -118,6 +118,15 @@ Options
     -k, --insecure
         Accept insecure https connections (mostly curl option compatibility)
 
+    --json <data>
+        Shortcut to POST the specified json data and automatically set the
+        Content-Type: and Accept: headers. This is equivalent to
+
+            --request POST  (implicit with --data)
+            --data <arg>
+            --header "Content-Type: application/json"  or --content application/json
+            --header "Accept: application/json"        or --accept application/json
+
     --json-pp
         When using a json action (see --action), pretty-print the json.
 

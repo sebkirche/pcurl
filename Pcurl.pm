@@ -32,7 +32,7 @@ use Symbol qw( gensym );
 use Time::Local;
 # use Carp::Always;
 
-our $VERSION = '0.9.8';
+our $VERSION = '0.9.9';
 $|++; # auto flush messages
 
 # -------- Signal handlers -------------------------
@@ -144,6 +144,7 @@ my @getopt_defs = (
     'insecure|k',
     # 'ipv4|4',                   # TODO
     # 'ipv6|6',                   # TODO
+    'json=s',
     'json-pp',
     'json-pp-indent=i',
     'json-stringify-null',
@@ -285,6 +286,13 @@ if ($args{cookie} || $args{'cookie-jar'}){
 # shortcut to -H 'Accept: mime'
 if ($args{accept}){
     push @{$args{header}}, "Accept: $args{accept}";
+}
+
+# shortcut for json payloads
+if ($args{json}){
+    push @{$args{header}}, "Content-Type: application/json";
+    push @{$args{header}}, "Accept: application/json";
+    $args{data} = $args{json};
 }
 
 my $cli_url = $args{url} || $ARGV[0];
@@ -3578,6 +3586,15 @@ Include the request headers in the output.
 =item -k, --insecure
 
 Accept insecure https connections (mostly curl option compatibility)
+
+=item --json <data>
+
+Shortcut to POST the specified json data and automatically set the Content-Type: and Accept: headers. This is equivalent to
+
+    --request POST  (implicit with --data)
+    --data <arg>
+    --header "Content-Type: application/json"  or --content application/json
+    --header "Accept: application/json"        or --accept application/json
 
 =item --json-pp
 
