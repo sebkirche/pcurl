@@ -420,7 +420,7 @@ sub process_loop {
                 # response might be undef after timeout
                 $failed_url{$req} = $r->{status}{code} if defined $r->{status} && $r->{status}{code} >= 400 && $r->{status}{code} <= 599;
                     
-                say STDERR sprintf("%s -> %s", $url->{url}, humanize_bytes($r->{byte_len})) if $r->{byte_len} && ($args{progression} || $args{verbose} || $args{debug});
+                say STDERR sprintf("%s -> %s", $url->{url}, humanize_bytes($r->{body_byte_len})) if $r->{body_byte_len} && ($args{progression} || $args{verbose} || $args{debug});
             }
             $processed_request{$req}++;
             
@@ -643,7 +643,9 @@ sub process_http {
         if ($url_final->{proxified} && @$pheaders){
             # ask proxy to connect
             send_http_request($IN, $OUT, $ERR, $pheaders, undef);
-            my $presp = process_http_response($IN, $ERR, $url_proxy, undef, undef, undef, undef, 1);
+            my $presp = process_http_response_headers(IN  => $IN,
+                                                      ERR => $ERR,
+                                                      url => $url_proxy);
             say STDERR "* Proxy returned " . $presp->{status}->{code} . " / " . $presp->{status}->{message} if $args{verbose} || $args{debug};
             unless ($presp->{status}->{code} == 200){
                 say STDERR sprintf "Proxy connection unsuccessful: %d / %s", $presp->{status}->{code}, $presp->{status}->{message};
@@ -661,10 +663,29 @@ sub process_http {
         my $need_capture = defined $process_action && !$process_action->{done} || $params{capture}; # && $process_action->{action} eq 'grep';
 
         # Receive the response
-        $resp = process_http_response($IN, $ERR, $url_final, $url_proxy, $need_capture, $fname, $following);
-        say STDERR Dumper $resp->{headers} if $args{debug};
-        say STDERR "* received $resp->{byte_len} bytes" if $args{verbose} || $args{debug};
-        if ($resp->{byte_len}){
+        if (!HTTP09()){ # there is no header in HTTP/0.9
+            $resp = process_http_response_headers(IN        => $IN,
+                                                  OUT       => current_output(),
+                                                  ERR       => $ERR,
+                                                  url       => $url_final,
+                                                  url_proxy => $url_proxy,
+                                                  out_file  => $fname,
+                                                  follow    => $following);
+            say STDERR Dumper $resp->{headers} if $args{debug};
+        }
+
+        $resp = process_http_response_body(IN        => $IN,
+                                           OUT       => current_output(),
+                                           ERR       => $ERR,
+                                           url       => $url_final,
+                                           url_proxy => $url_proxy,
+                                           response  => $resp,
+                                           capture   => $need_capture,
+                                           out_file  => $fname,
+                                           follow    => $following);
+        
+        say STDERR "* received $resp->{body_byte_len} bytes" if $args{verbose} || $args{debug};
+        if ($resp->{head_byte_len} + $resp->{body_byte_len}){
             my $code = $resp->{status}{code};
             say STDERR '* ' . $url_final->{url} . ' -> ' . $code if $args{verbose} || $args{debug};
             if ($args{location} && (300 < $code) && ($code <= 399)){
@@ -755,7 +776,7 @@ sub process_http {
                 goto BREAK;         # weird, 'last' is throwing a warning "Exiting subroutine via last"
             }
         }
-    } while ($resp->{byte_len} && $url_final && $redirs >= 0);
+    } while (($resp->{head_byte_len} + $resp->{body_byte_len}) && $url_final && $redirs >= 0);
   BREAK:
     restore_output();
     if ($args{'remote-time'}    # FIXME: add test on redirection
@@ -796,7 +817,7 @@ sub process_file {
     }
     my $size = (stat $path)[7];
     say STDERR "* size of $path is $size" if $args{debug};
-    $resp->{byte_len} = $size;
+    $resp->{body_byte_len} = $size;
 
     redirect_output_to_file($args{output});
 
@@ -1098,33 +1119,30 @@ sub build_http_proxy_headers {
 # - headers: hash of response headers from server
 # - byte_len: the size of the response
 # - captured: when performing actions, store the response content in this key
-sub process_http_response {
-    my ($IN, $ERR, $url_final, $url_proxy, $need_capture, $output_name, $following, $only_body) = @_;
+sub process_http_response_headers {
+    my %params       = @_;
+    my $IN           = $params{IN};
+    my $ERR          = $params{ERR};
+    my $url_final    = $params{url};
+    my $url_proxy    = $params{url_proxy};
+    my $output_name  = $params{out_file};
+    my $following    = $params{follow};
     my $headers_done = 0;       # flag to know if we are processing headers or body
     my $status_done = 0;        # flag to know if we have processed the status
     my $received = 0;           # counter for total bytes received
-    my $chunked_mode = 0;       # flag set when chunked mode
-    my $content_length = 0;     # size of response, according to the response header
     my %headers;                # a map for all received headers
     my %resp;                   # response meta-data
-    my $resp_buf;               # buffer to store response instead of STDOUT/file
 
-    my $out;                    # we print in $out that can be a file or STDOUT
+    my $out = $params{OUT};                    # we print in $out that can be a file or STDOUT
     # my $old_out;                # for actions & recursive mode we need to redirect to memory, this will keep previous $out
     # when we receive the server response, we print the result to STDOUT (and possibly the headers)
     # but when we need to process actions (e.g. for pattern matching) we capture output to a memory buffer
-    if ($need_capture){
-        # open($out, '>', \$resp_buf) or die "Cannot capture output: $!"; # out is a variable
-        redirect_output_to_file(\$resp_buf);
-    # } else {
-        # $out = $current_output; # open file or STDOUT
-    }
-    $out = current_output();
+    # $out = current_output();
     my $selector = IO::Select->new();
     $selector->add($ERR) if $ERR;
     $selector->add($IN);
 
-    say STDERR "* Processing response" if $args{debug};
+    say STDERR "* Processing response head" if $args{debug};
 
     # reading loop on both server output and errors, with a timeout
     while (my @ready = $selector->can_read($args{'max-wait'} || $def_max_wait)) {
@@ -1146,7 +1164,7 @@ sub process_http_response {
                       $received += length($line);
                       $line =~ s/[\r\n]+$//;
                       say STDERR '< ', $line if $args{verbose} || $args{debug};
-                      say $out $line if !$need_capture && $args{head} || $args{'include-response'};
+                      say $out $line if $args{head} || $args{'include-response'};
                       if ($line =~ /^$/){
                           $headers_done++;
                           last HEAD;
@@ -1192,8 +1210,6 @@ sub process_http_response {
                                                      $hcook->{'max-age'} || 0) if $args{verbose} || $args{debug};
                                   push @$cookies, $hcook;
                               }
-                          } elsif ($hname eq 'transfer-encoding' && lc $hvalue eq 'chunked'){
-                              $chunked_mode++;
                           }
 
                           if (exists $headers{$hname}){
@@ -1213,13 +1229,82 @@ sub process_http_response {
                       }                            
                   }
                 } # end of headers processing --------------------------------------------
-                goto AFTER_BODY if $only_body;
+                goto AFTER_HEADERS;# interrupt reading, the body will be processed in another sub
                 
-                $content_length = $headers{'content-length'};
+            };
+            
+            # if (eof($fh)){
+               # say STDERR "* Nothing left in the filehandle $fh" if $args{debug};
+               # $selector->remove($fh);
+            # }
+        }
+    }
+  AFTER_HEADERS:
+    
+    $resp{headers} = \%headers;
+    $resp{head_byte_len} = $received; # keep the size of read data
 
+    say STDERR "* end of response head" if $args{debug};
+    say STDERR "Parsed cookies: ", Dumper $cookies if $args{debug};
+    return \%resp;
+}
+
+sub process_http_response_body {
+    my %params       = @_;
+    my $IN           = $params{IN};
+    my $ERR          = $params{ERR};
+    my $url_final    = $params{url};
+    my $url_proxy    = $params{url_proxy};
+    my $need_capture = $params{capture};
+    my $output_name  = $params{out_file};
+    my $following    = $params{follow};
+    my $response     = $params{response};
+    my $headers_done = 0;       # flag to know if we are processing headers or body
+    my $status_done = 0;        # flag to know if we have processed the status
+    my $received = 0;           # counter for total bytes received
+    my $chunked_mode = 0;       # flag set when chunked mode
+    my $content_length = 0;     # size of response, according to the response header
+    my $resp_buf;               # buffer to store response instead of STDOUT/file
+
+    my $out = $params{OUT};                    # we print in $out that can be a file or STDOUT
+    # my $old_out;                # for actions & recursive mode we need to redirect to memory, this will keep previous $out
+    # when we receive the server response, we print the result to STDOUT (and possibly the headers)
+    # but when we need to process actions (e.g. for pattern matching) we capture output to a memory buffer
+    if ($need_capture){
+        # open($out, '>', \$resp_buf) or die "Cannot capture output: $!"; # out is a variable
+        redirect_output_to_file(\$resp_buf);
+    # } else {
+        # $out = $current_output; # open file or STDOUT
+    }
+    $out = current_output();
+    my $selector = IO::Select->new();
+    $selector->add($ERR) if $ERR;
+    $selector->add($IN);
+
+    say STDERR "* Processing response body" if $args{debug};
+
+    if ($response->{headers}{'transfer-encoding'} && $response->{headers}{'transfer-encoding'} eq 'chunked'){
+        $chunked_mode = 1;
+    }
+    
+    # reading loop on both server output and errors, with a timeout
+    while (my @ready = $selector->can_read($args{'max-wait'} || $def_max_wait)) {
+        foreach my $fh (@ready) {
+            if ($ERR && (fileno($fh) == fileno($ERR))) {
+                my $line = <$fh>;
+                $line =~ s/[\r\n]+$//;
+                say STDERR "* proxy/tunnel STDERR: $line" if $args{debug};
+                if ($url_final->{tunneled} && ($line =~ /^s_client: HTTP CONNECT failed: (\d+) (.*)/)){
+                    my $err_txt = sprintf("Received '%d %s' from tunnel after CONNECT", $1, $2);
+                    say STDERR $err_txt;
+                    exit 5;
+                }
+            } elsif (fileno($fh) == fileno($IN)) {
+                say STDERR "* processing STDIN" if $args{debug};
+                                
                 # avoid unwanted binary output
-                if ($headers{'content-type'}){
-                    if ($headers{'content-type'} =~ /charset=binary/){
+                if ($response->{headers}{'content-type'}){
+                    if ($response->{headers}{'content-type'} =~ /charset=binary/){
                         if (!$args{output}
                             && (!$args{'remote-name'} && !$args{'remote-header-name'})
                             && -t $out){
@@ -1230,7 +1315,7 @@ curl to output it to your terminal anyway, or consider "--output
 NO_BIN
                             exit 10;
                         }
-                    } elsif (!$need_capture && $args{recursive} && $headers{'content-type'} =~ m{(text/html|text/css)}){
+                    } elsif (!$need_capture && $args{recursive} && $response->{headers}{'content-type'} =~ m{(text/html|text/css)}){
                         # $old_out = $out;
                         # $out = gensym(); # allocate a new "variable" usable to store a fh
                         # open $out, '>', \$resp_buf or die "Cannot capture output: $!";
@@ -1244,8 +1329,8 @@ NO_BIN
                 my $fname = '';
                 if ($args{'remote-name'}){
                     if ($args{'remote-header-name'}
-                        && ($headers{'content-disposition'}
-                            && $headers{'content-disposition'} =~ /attachment; filename="([^"]+)"/)
+                        && ($response->{headers}{'content-disposition'}
+                            && $response->{headers}{'content-disposition'} =~ /attachment; filename="([^"]+)"/)
                         ){
                         my $remote_header_name = $1;
                         if (!$args{output} && $remote_header_name && -w $remote_header_name){
@@ -1260,16 +1345,16 @@ NO_BIN
                     # we received the name from server
                     # we should not have redirected in this case
                     redirect_output_to_file("${prefix}${fname}");
-                    $resp{redirected} = "${prefix}${fname}";
+                    $response->{redirected} = "${prefix}${fname}";
                 }
                 
                 # we show body contents only when not following redirects
-                my $is_redirected = $resp{status} && $resp{status}{code} && $resp{status}{code} =~ /^3/;
+                my $is_redirected = $response->{status} && $response->{status}{code} && $response->{status}{code} =~ /^3/;
                 say STDERR "* Ignoring the response-body" if ($is_redirected && $args{location}) && (! $fh->eof ) && ($args{verbose} || $args{debug});
                 binmode($out, ":raw"); # pass in raw layer to prevent utf8 or cr/lf conversion in binary files
 
-
-                if ($content_length){                                         
+                $content_length = $response->{headers}{"content-length"};
+                if (defined $content_length){                                         
                     say STDERR "* need to read $content_length bytes in response" if $args{debug};
                 } else {
                     say STDERR "* Unknown size of response to read" if $args{debug};
@@ -1321,10 +1406,8 @@ NO_BIN
             }
         }
     }
-  AFTER_BODY:
     
-    $resp{headers} = \%headers;
-    $resp{byte_len} = $received; # keep the size of read data
+    $response->{body_byte_len} = $received; # keep the size of read data
     if ($need_capture){
         # restore the output to the original value before capture
         say STDERR sprintf("* Captured %d bytes:\n%s", length $resp_buf, $resp_buf // '') if $args{debug};
@@ -1332,12 +1415,11 @@ NO_BIN
         # $out = $old_out;
         restore_output();
         $out = current_output();
-        $resp{captured} = \$resp_buf;
+        $response->{captured} = \$resp_buf;
     }
 
-    say STDERR "Parsed cookies: ", Dumper $cookies if $args{debug};
-    say STDERR "* end of response" if $args{debug};
-    return \%resp;
+    say STDERR "* end of response body" if $args{debug};
+    return $response;
 }
 
 # Build the value of a Cookie: header containing the cookies
