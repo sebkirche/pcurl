@@ -952,7 +952,7 @@ sub build_http_request_headers {
         # we need to pass the port after host only when the port is not the default associated to the protocol
         # see RFC2616 §14.23
         my $hostport = '';      
-        if (($u->{scheme} eq 'http') && ($u->{port} != $defports{$u->{scheme}})){
+        if ($u->{port} != $defports{$u->{scheme}}){
             $hostport = ":$u->{port}";
         }
         push @$headers, "Host: $u->{host}${hostport}" unless exists $custom{host};
