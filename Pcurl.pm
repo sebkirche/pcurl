@@ -136,6 +136,8 @@ my @getopt_defs = (
     'debug-urls',
     'debug-json=s',
     'debug-json-export',
+    'fail|f',
+    'fail-with-body',
     'header|H=s@',
     'head|I',
     'help|h|?',
@@ -547,71 +549,78 @@ sub process_http {
         $process_action->{done} = undef;
     }
 
-    # set the filename for output when redirecting or using url name
     my $fname;
     my $out_file;
-    if ($args{output}){
-        $fname = $args{output};
-    } elsif ($args{'remote-name'} && !$args{'remote-header-name'}){
-        if ($rel_url_to_local_dir{$url_final->{url}}){
-            # if this is a file from crawler mode
-            $fname = $rel_url_to_local_dir{$url_final->{url}};
-            if ($fname =~ m{/$}){
-                $fname .= "${index_name}";
-            }
-        } elsif ($url_final->{path} =~ m{.*/([^/]+)$}){
-            # get filename from url
-            if ($args{recursive} && !$args{'recursive-flat'}){
-                $fname = urldecode($&);
-            } else {
-                $fname = urldecode($1);
-            }
-            $fname = substr($fname, 1) if $fname =~ m{^/}; # drop initial /
-        } elsif ($url_final->{path} =~ m{/$}){
-            $fname = $url_final->{path} . ${index_name};
-            $fname = substr($fname, 1); # drop initial /
-        } else {
-            unless ($following || $process_action && index($process_action->{what}, 'getlinked') == 0){
-                say STDERR "Cannot get remote file name from url.";
-                exit 7;
-            }
-        }
-    }
-    if ($fname && $fname ne '-'){
-        # process cut-dirs
-        if ($args{'cut-dirs'}){
-            # split the path segments
-            my @path = split(m{/}, $fname);
-            my $f = pop @path;  # keep the file
-            # remove the required number of elements
-            if ($args{'recursive-flat'}){
-                @path = ();
-            } else {
-                for (my $i=1; $i <= $args{'cut-dirs'}; $i++){
-                    shift @path;
-                }
-            }
-            if (@path){
-                $fname = join('/', @path) . "/$f";
-            } else {
-                $fname = $f;
-            }
-        }
-        my $h = '';
-        if ($args{recursive} && !$args{'no-host-directories'}){
-            $h = $url_final->{host};
-            if ($url_final->{port} != $defports{$url_final->{scheme}}){
-                $h .= ':' . $url_final->{port};
-            }
-            $h .= '/';
-        }
-        $out_file = "${prefix}${h}${fname}";
-        make_path($out_file);
-        redirect_output_to_file($out_file);
-    }
-    
+
+    my $next_url;
+    my $no_follow_after_body = 0; # flag if we want to break the follow loop
+  REDIRECT:
     do {
         say STDERR "* Processing url $url_final->{url}" if $args{verbose} || $args{debug};
+        $next_url = '';
+
+        # set the filename for output when redirecting or using url name
+        if ($args{output}){
+            $fname = $args{output};
+        } elsif ($args{'remote-name'} && !$args{'remote-header-name'}){
+            if ($rel_url_to_local_dir{$url_final->{url}}){
+                # if this is a file from crawler mode
+                $fname = $rel_url_to_local_dir{$url_final->{url}};
+                if ($fname =~ m{/$}){
+                    $fname .= "${index_name}";
+                }
+            } elsif ($url_final->{path} =~ m{.*/([^/]+)$}){
+                # get filename from url
+                if ($args{recursive} && !$args{'recursive-flat'}){
+                    $fname = urldecode($&);
+                } else {
+                    $fname = urldecode($1);
+                }
+                $fname = substr($fname, 1) if $fname =~ m{^/}; # drop initial /
+            } elsif ($url_final->{path} =~ m{/$}){
+                $fname = $url_final->{path} . ${index_name};
+                $fname = substr($fname, 1); # drop initial /
+            } else {
+                unless ($following || $process_action && index($process_action->{what}, 'getlinked') == 0){
+                    say STDERR "Cannot get remote file name from url.";
+                    exit 7;
+                }
+            }
+        }
+        if ($fname && $fname ne '-'){
+            # process cut-dirs
+            if ($args{'cut-dirs'}){
+                # split the path segments
+                my @path = split(m{/}, $fname);
+                my $f = pop @path;  # keep the file
+                # remove the required number of elements
+                if ($args{'recursive-flat'}){
+                    @path = ();
+                } else {
+                    for (my $i=1; $i <= $args{'cut-dirs'}; $i++){
+                        shift @path;
+                    }
+                }
+                if (@path){
+                    $fname = join('/', @path) . "/$f";
+                } else {
+                    $fname = $f;
+                }
+            }
+            my $h = '';
+            if ($args{recursive} && !$args{'no-host-directories'}){
+                $h = $url_final->{host};
+                if ($url_final->{port} != $defports{$url_final->{scheme}}){
+                    $h .= ':' . $url_final->{port};
+                }
+                $h .= '/';
+            }
+            $out_file = "${prefix}${h}${fname}";
+            # make_path($out_file);
+            # redirect_output_to_file($out_file);
+        }
+        
+        my $redirect_pending = 0;
         my $url_proxy = get_proxy_settings($url_final);
         my $pheaders = [];
         if ($url_proxy){
@@ -658,12 +667,9 @@ sub process_http {
         # Write to the server
         send_http_request($IN, $OUT, $ERR, $headers, $body);
         
-        # for some actions we need to capture the output into a variable
-        # also an external caller could want the output saved in the $resp object
-        my $need_capture = defined $process_action && !$process_action->{done} || $params{capture}; # && $process_action->{action} eq 'grep';
-
         # Receive the response
-        if (!HTTP09()){ # there is no header in HTTP/0.9
+        if (!HTTP09()){
+            # there is no header in HTTP/0.9
             $resp = process_http_response_headers(IN        => $IN,
                                                   OUT       => current_output(),
                                                   ERR       => $ERR,
@@ -671,9 +677,75 @@ sub process_http {
                                                   url_proxy => $url_proxy,
                                                   out_file  => $fname,
                                                   follow    => $following);
-            say STDERR Dumper $resp->{headers} if $args{debug};
+            say STDERR "* received $resp->{head_byte_len} headers bytes" if $args{verbose} || $args{debug};
+            say STDERR Dumper $resp if $args{debug};
+            if ($resp->{head_byte_len}){
+                my $code = $resp->{status}{code};
+                say STDERR '* ' . $url_final->{url} . ' -> ' . $code if $args{verbose} || $args{debug};
+                say STDERR Dumper $resp->{headers} if $args{debug};
+               
+                if ($args{location} && $code && (300 < $code) && ($code <= 399)){
+                    # we want to follow redirects and we have a redirect
+                    unless($redirs){
+                        say STDERR sprintf("* Maximum (%d) redirects followed", $max_redirs);
+                        $no_follow_after_body = 1;
+                    } else {
+                        $redirect_pending = 1;
+                    }
+                    my ($old_scheme, $old_host, $old_port) = ($url_final->{scheme}, $url_final->{host}, $url_final->{port});
+
+                    $url_final = get_redirected_url($url_final, $resp->{headers}{location});
+                    $next_url = $url_final->{url};
+                    
+                    # compare new url with previous and reconnected if needed
+                    if (($url_final->{scheme} ne $old_scheme) || ($url_final->{host} ne $old_host) || ($url_final->{port} != $old_port)){
+                        say STDERR "* Closing connection because of scheme/server redirect" if $args{verbose} || $args{debug};
+                        say STDERR sprintf("* scheme %s -> %s", $old_scheme, $url_final->{scheme}) if $url_final->{scheme} ne $old_scheme && $args{verbose} || $args{debug};
+                        say STDERR sprintf("* host %s -> %s", $old_host, $url_final->{host}) if $url_final->{host} ne $old_host && $args{verbose} || $args{debug};
+                        say STDERR sprintf("* port %s -> %s", $old_port, $url_final->{port}) if $url_final->{port} ne $old_port && $args{verbose} || $args{debug};
+                        close $IN;
+                        close $OUT;
+                        close $ERR if $ERR;
+                    }
+                    say STDERR sprintf("* Redirecting #%d to %s", $max_redirs - $redirs,  $url_final->{url}) if $args{verbose} || $args{debug};
+                    $redirs--;
+                } elsif ($code == 300){
+                    # server do not know what to serve
+                    say STDERR "* 300 'Multiple Choices' on $url_final->{url}" if $args{verbose} || $args{debug};
+                } elsif ($code >= 400 && $code <= 599){
+                    # something is wrong
+                    say STDERR "* $code on $url_final->{url}" if $args{verbose} || $args{debug};
+                    if ($args{fail} || $args{'fail-with-body'}){
+                        # we are not in crawling mode
+                        # $error_code = $code; # FIXME: max is 255
+                        $error_code = 11 if $code >= 400 && $code <= 499;
+                        $error_code = 12 if $code >= 500 && $code <= 599;
+                        $no_follow_after_body = 1;
+                        goto BREAK if $args{fail};
+                    }
+                    # if ($out_file){
+                    #    # do not leave empty files
+                    #    unlink $out_file;
+                    #}
+
+                }
+            }
         }
 
+        unless ($redirect_pending){
+            make_path($out_file);
+            redirect_output_to_file($out_file);
+        }
+
+        # for some actions we need to capture the output into a variable
+        # also an external caller could want the output saved in the $resp object
+        my $need_capture;
+        if ($params{capture}
+            || (defined $process_action && !$process_action->{done})
+            || ($args{recursive} && $resp->{headers}{'content-type'} && $resp->{headers}{'content-type'} =~ m{(text/html|text/css)})){
+            $need_capture = 1;
+        }
+        
         $resp = process_http_response_body(IN        => $IN,
                                            OUT       => current_output(),
                                            ERR       => $ERR,
@@ -684,99 +756,41 @@ sub process_http {
                                            out_file  => $fname,
                                            follow    => $following);
         
-        say STDERR "* received $resp->{body_byte_len} bytes" if $args{verbose} || $args{debug};
+        say STDERR "* received $resp->{body_byte_len} body bytes" if $args{verbose} || $args{debug};
         if ($resp->{head_byte_len} + $resp->{body_byte_len}){
-            my $code = $resp->{status}{code};
-            say STDERR '* ' . $url_final->{url} . ' -> ' . $code if $args{verbose} || $args{debug};
-            if ($args{location} && (300 < $code) && ($code <= 399)){
-                # if the result is a redirect, follow it
-                unless($redirs){
-                    say STDERR sprintf("* Maximum (%d) redirects followed", $max_redirs);
-                    goto BREAK;
+            
+            # result other than redirect
+            if ($process_action){
+                if (!$process_action->{done}){
+                    perform_action($process_action, $url_final, $resp, $discovered_links, ($params{capture} ? $params{capture} == 1 : 0));
+                    $process_action->{done} = 1;
                 }
-                $following++;
-                $args{referer} = $url_final->{url} if $auto_ref;      # use previous url as next referer
-                my ($old_scheme, $old_host, $old_port) = ($url_final->{scheme}, $url_final->{host}, $url_final->{port});
-                my $loc = $resp->{headers}{location}; # get redirected url
-                if ($loc !~ m{^https?://}){
-                    # fix URLs when scheme is missing
-                    my $user_info = auth_string($url_final);
-                    my $authority = $url_final->{host};
-                    $authority = $user_info . $authority if $user_info;
-                    $authority .= sprintf(":%s", $url_final->{port}) if $url_final->{port} != $defports{$url_final->{scheme}};
-                    $loc = sprintf("%s://%s%s",
-                                   $url_final->{scheme},
-                                   $authority,
-                                   canonicalize($loc));
+            } elsif ($resp->{headers}{'content-type'} && $resp->{headers}{'content-type'} =~ '(text/html|text/css)'){
+                if ($discovered_links){
+                    push @$discovered_links, discover_links($resp, $url_final, $acceptrx, $rejectrx, !$args{'recursive-flat'});
                 }
-                $url_final = parse_uri($loc);
-                $url_final = complete_url_default_values($url_final); # is this correct??
-                # FIXME: in case of local schemeless url...  <=======
-                # relative redirect urls may miss some parameters
-                if (($url_final->{scheme} ne $old_scheme) || ($url_final->{host} ne $old_host) || ($url_final->{port} != $old_port)){
-                    $url_final->{scheme} = $old_scheme unless $url_final->{scheme};
-                    $url_final->{port} = $defports{$url_final->{scheme}} unless $url_final->{port};
-                }
-                $url_final->{port} = $old_port unless $url_final->{port};
-                $url_final->{host} = $old_host unless $url_final->{host};
-                # compare new url with previous and reconnected if needed
-                if (($url_final->{scheme} ne $old_scheme) || ($url_final->{host} ne $old_host) || ($url_final->{port} != $old_port)){
-                    say STDERR "* Closing connection because of scheme/server redirect" if $args{verbose} || $args{debug};
-                    say STDERR sprintf("* scheme %s -> %s", $old_scheme, $url_final->{scheme}) if $url_final->{scheme} ne $old_scheme && $args{verbose} || $args{debug};
-                    say STDERR sprintf("* host %s -> %s", $old_host, $url_final->{host}) if $url_final->{host} ne $old_host && $args{verbose} || $args{debug};
-                    say STDERR sprintf("* port %s -> %s", $old_port, $url_final->{port}) if $url_final->{port} ne $old_port && $args{verbose} || $args{debug};
-                    close $IN;
-                    close $OUT;
-                    close $ERR if $ERR;
-                }
-                say STDERR sprintf("* Redirecting #%d to %s", $max_redirs - $redirs,  $url_final->{url}) if $args{verbose} || $args{debug};
-                $redirs--;
-            } elsif ($code == 300){
-                say STDERR "* 300 'Multiple Choices' on $url_final->{url}";
-                goto BREAK;
-            } elsif ($code >= 400 && $code <= 599){
-                say STDERR "* $code on $url_final->{url}";
-                if ($out_file){
-                    # do not leave empty files
-                    unlink $out_file;
-                }
-                unless (defined $args{recursive}){
-                    # we are not in crawling mode
-                    $error_code = 11 if $code >= 400 && $code <= 499;
-                    $error_code = 12 if $code >= 500 && $code <= 599;
-                }
-                goto BREAK;
-            } else {
-                # result other than redirect
-                if ($process_action){
-                    if (!$process_action->{done}){
-                        perform_action($process_action, $url_final, $resp, $discovered_links, ($params{capture} ? $params{capture} == 1 : 0));
-                        $process_action->{done} = 1;
-                    }
-                } elsif ($resp->{headers}{'content-type'} && $resp->{headers}{'content-type'} =~ '(text/html|text/css)'){
-                    if ($discovered_links){
-                        push @$discovered_links, discover_links($resp, $url_final, $acceptrx, $rejectrx, !$args{'recursive-flat'});
-                    }
-                }                                   
+            }                                   
 
-                # save eventually the captured data into a file for getlinked or recursive
-                if ($resp->{captured}
-                   && (
-                       ($process_action && index($process_action->{what}, 'getlinked') == 0)
-                       ||
-                       $args{recursive}
-                    )){
-                    # need to use select as "print current_output ${$resp->{captured}}" prints "GLOB(0x1f75cd8)" (the current_output) to STDOUT
-                    # my $old_selected = select current_output;
-                    # say STDERR "output is " . current_output;
-                    print {current_output} ${$resp->{captured}}; #if defined ${$resp->{captured}};
-                    # select $old_selected;
-                }
-
-                goto BREAK;         # weird, 'last' is throwing a warning "Exiting subroutine via last"
+            # save eventually the captured data into a file for getlinked or recursive
+            if ($resp->{captured}
+                && (
+                    ($process_action && index($process_action->{what}, 'getlinked') == 0)
+                    ||
+                    $args{recursive}
+                )){
+                # need to use select as "print current_output ${$resp->{captured}}" prints "GLOB(0x1f75cd8)" (the current_output) to STDOUT
+                # my $old_selected = select current_output;
+                # say STDERR "output is " . current_output;
+                print {current_output} ${$resp->{captured}} if defined ${$resp->{captured}};
+                # select $old_selected;
             }
+
+            # goto BREAK;         # weird, 'last' is throwing a warning "Exiting subroutine via last"
         }
-    } while (($resp->{head_byte_len} + $resp->{body_byte_len}) && $url_final && $redirs >= 0);
+
+        last REDIRECT if $no_follow_after_body;
+
+  } while (($resp->{head_byte_len} + $resp->{body_byte_len}) && $next_url && $redirs >= 0);
   BREAK:
     restore_output();
     if ($args{'remote-time'}    # FIXME: add test on redirection
@@ -801,6 +815,38 @@ sub process_http {
     exit $error_code if $error_code;
     
     return $resp;
+}
+
+# when getting a 3xx redirect in HTTP, compute the next URL attributes
+# from the Location header
+sub get_redirected_url {
+    my ($url, $location) = @_;
+    
+    $args{referer} = $url->{url} if $auto_ref;      # use previous url as next referer
+    my ($old_scheme, $old_host, $old_port) = ($url->{scheme}, $url->{host}, $url->{port});
+    if ($location !~ m{^https?://}){
+        # fix URLs when scheme is missing
+        my $user_info = auth_string($url);
+        my $authority = $url->{host};
+        $authority = $user_info . $authority if $user_info;
+        $authority .= sprintf(":%s", $url->{port}) if $url->{port} != $defports{$url->{scheme}};
+        $location = sprintf("%s://%s%s",
+                            $url->{scheme},
+                            $authority,
+                            canonicalize($location));
+    }
+    $url = parse_uri($location);
+    $url = complete_url_default_values($url); # is this correct??
+    # FIXME: in case of local schemeless url...  <=======
+    # relative redirect urls may miss some parameters
+    if (($url->{scheme} ne $old_scheme) || ($url->{host} ne $old_host) || ($url->{port} != $old_port)){
+        $url->{scheme} = $old_scheme unless $url->{scheme};
+        $url->{port} = $defports{$url->{scheme}} unless $url->{port};
+    }
+    $url->{port} = $old_port unless $url->{port};
+    $url->{host} = $old_host unless $url->{host};
+
+    return $url;
 }
 
 # perform a file:// query
@@ -1133,11 +1179,20 @@ sub process_http_response_headers {
     my %headers;                # a map for all received headers
     my %resp;                   # response meta-data
 
-    my $out = $params{OUT};                    # we print in $out that can be a file or STDOUT
-    # my $old_out;                # for actions & recursive mode we need to redirect to memory, this will keep previous $out
-    # when we receive the server response, we print the result to STDOUT (and possibly the headers)
-    # but when we need to process actions (e.g. for pattern matching) we capture output to a memory buffer
-    # $out = current_output();
+    my $out;
+    my $head_buf;
+    # FIXME: always capture
+    if (1){ #$args{recursive}){
+        redirect_output_to_file(\$head_buf);
+    
+        # my $old_out;                # for actions & recursive mode we need to redirect to memory, this will keep previous $out
+        # when we receive the server response, we print the result to STDOUT (and possibly the headers)
+        # but when we need to process actions (e.g. for pattern matching) we capture output to a memory buffer
+        $out = current_output();
+    } else {
+        $out = $params{OUT};                    # we print in $out that can be a file or STDOUT
+    }
+    
     my $selector = IO::Select->new();
     $selector->add($ERR) if $ERR;
     $selector->add($IN);
@@ -1161,6 +1216,7 @@ sub process_http_response_headers {
                 if (! $headers_done && !HTTP09()){ # there is no header in HTTP/0.9
                     # local $/ = "\r\n";
                   HEAD: while(defined (my $line = <$IN>)){
+                      print $out $line;
                       $received += length($line);
                       $line =~ s/[\r\n]+$//;
                       say STDERR '< ', $line if $args{verbose} || $args{debug};
@@ -1243,7 +1299,11 @@ sub process_http_response_headers {
     
     $resp{headers} = \%headers;
     $resp{head_byte_len} = $received; # keep the size of read data
-
+    # FIXME: always capture
+    if (1){ #$args{recursive}){
+        restore_output();
+        $resp{captured_head} = \$head_buf;
+    }
     say STDERR "* end of response head" if $args{debug};
     say STDERR "Parsed cookies: ", Dumper $cookies if $args{debug};
     return \%resp;
@@ -1315,13 +1375,6 @@ curl to output it to your terminal anyway, or consider "--output
 NO_BIN
                             exit 10;
                         }
-                    } elsif (!$need_capture && $args{recursive} && $response->{headers}{'content-type'} =~ m{(text/html|text/css)}){
-                        # $old_out = $out;
-                        # $out = gensym(); # allocate a new "variable" usable to store a fh
-                        # open $out, '>', \$resp_buf or die "Cannot capture output: $!";
-                        redirect_output_to_file(\$resp_buf);
-                        $out = current_output();
-                        $need_capture = 1;
                     }
                 }
 
@@ -1678,7 +1731,7 @@ sub perform_action {
     my ($action, $url, $resp, $discovered_links, $store_result) = @_;
 
     if ($action->{what} eq 'header'){
-        my $res = $resp->{headers}{lc $action->{value}};
+        my $res = $resp->{headers}{lc $action->{value}} || '';
         if ($store_result){
             $resp->{action_result} = $res; 
         } else {
@@ -3637,6 +3690,14 @@ Similar to --data, but do not interpret an initial '@' character.
 =item --data-urlencode <data>
 
 Similar to --data-raw, but the data will be url-encoded.
+
+=item -f, --fail
+
+Do not continue on 4xx and 5xx results and return an error. Body response is not returned.
+
+=item --fail-with-body
+
+Do not continue on 4xx and 5xx results and return an error. Body response is returned.
 
 =item -I, --head
 
