@@ -85,6 +85,7 @@ _pcurl_completion() {
     
     local cur="${COMP_WORDS[COMP_CWORD]}"
     local prev="${COMP_WORDS[COMP_CWORD-1]}"
+    local opt_add="--http10 --http11"
     local opt_alias="--user --data-ascii --include-response --follow --notcp-nodelay"
 
     case "$prev" in
@@ -120,7 +121,7 @@ _pcurl_completion() {
     esac
 
     if [[ ${cur} == -* ]] ; then
-        COMPREPLY=( $(compgen -W '$opt_alias $(_pcurl_parse_help "$1")' -- ${cur}) )
+        COMPREPLY=( $(compgen -W '$opt_add $opt_alias $(_pcurl_parse_help "$1")' -- ${cur}) )
         return 0 
     fi
 
