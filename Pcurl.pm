@@ -489,7 +489,7 @@ sub redirect_output_to_file {
     if ($out_name && $out_name ne '-'){
         # open $STDOLD, '>&', STDOUT;
         my $new_fd = gensym();
-        open $new_fd, '>', $out_name or die "Cannot open $out_name for output.";
+        open $new_fd, '>', $out_name or die "Cannot open '$out_name' for output.";
         push @output_stack, $new_fd;
         # my $line = [caller(0)]->[2];
         # my $sub = [caller(1)]->[3];
@@ -622,6 +622,7 @@ sub process_http {
         }
         
         my $redirect_pending = 0;
+        my $discard_output_creation = 0;
         my $url_proxy = get_proxy_settings($url_final);
         my $pheaders = [];
         if ($url_proxy){
@@ -678,6 +679,7 @@ sub process_http {
                                                   url_proxy => $url_proxy,
                                                   out_file  => $fname,
                                                   follow    => $following);
+            print {current_output} ${$resp->{captured_head}} if defined ${$resp->{captured_head}};
             say STDERR "* received $resp->{head_byte_len} headers bytes" if $args{verbose} || $args{debug};
             say STDERR Dumper $resp if $args{debug};
             if ($resp->{head_byte_len}){
@@ -713,6 +715,7 @@ sub process_http {
                 } elsif ($code == 300){
                     # server do not know what to serve
                     say STDERR "* 300 'Multiple Choices' on $url_final->{url}" if $args{verbose} || $args{debug};
+                    $discard_output_creation = 1;
                 } elsif ($code >= 400 && $code <= 599){
                     # something is wrong
                     say STDERR "* $code on $url_final->{url}" if $args{verbose} || $args{debug};
@@ -724,6 +727,7 @@ sub process_http {
                         $no_follow_after_body = 1;
                         goto BREAK if $args{fail};
                     }
+                    $discard_output_creation = 1;
                     # if ($out_file){
                     #    # do not leave empty files
                     #    unlink $out_file;
@@ -733,8 +737,11 @@ sub process_http {
             }
         }
 
-        if ($args{output} 
-            || ($args{recursive} && !$redirect_pending)){
+        if (!$redirect_pending
+            && !$discard_output_creation
+            && ($args{output}
+            || $args{'remote-name'}
+            || $args{recursive})){
             make_path($out_file);
             redirect_output_to_file($out_file);
         }
@@ -1218,7 +1225,7 @@ sub process_http_response_headers {
                 if (! $headers_done && !HTTP09()){ # there is no header in HTTP/0.9
                     # local $/ = "\r\n";
                   HEAD: while(defined (my $line = <$IN>)){
-                      print $out $line;
+                      # print $out $line;
                       $received += length($line);
                       $line =~ s/[\r\n]+$//;
                       say STDERR '< ', $line if $args{verbose} || $args{debug};
@@ -2683,6 +2690,7 @@ sub dump_url {
 sub make_path {
     my ($path, $from) = @_;
     if (index($path, '/') == 0){
+        # remove initial separator
         $path = substr($path, 1);
     }
     if ($path =~ m{(.+)/[^/]*$}){
