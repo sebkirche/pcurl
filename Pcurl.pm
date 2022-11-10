@@ -336,7 +336,7 @@ if ($args{summary}){
     }
     say STDERR sprintf("* %d Broken URLS:", scalar keys %broken_url) if keys %broken_url;
     say STDERR $_ for sort keys %broken_url;
-    say STDERR sprintf("* %d Failed URLS:", scalar keys %failed_url) if keys %failed_url;
+    say STDERR sprintf("* %d Failed URLS (can be due to dumb url detection):", scalar keys %failed_url) if keys %failed_url;
     say STDERR "$_ -> $failed_url{$_}" for sort keys %failed_url;
 }
 
