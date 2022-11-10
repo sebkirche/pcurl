@@ -555,6 +555,7 @@ sub process_http {
     my $next_url;
     my $no_follow_after_body = 0; # flag if we want to break the follow loop
   REDIRECT:
+        # we can loop in case of 3xx redirect
     do {
         say STDERR "* Processing url $url_final->{url}" if $args{verbose} || $args{debug};
         $next_url = '';
@@ -732,7 +733,8 @@ sub process_http {
             }
         }
 
-        unless ($redirect_pending){
+        if ($args{output} 
+            || ($args{recursive} && !$redirect_pending)){
             make_path($out_file);
             redirect_output_to_file($out_file);
         }
