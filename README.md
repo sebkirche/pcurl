@@ -49,6 +49,13 @@ Options
         Perform an action on the response. It can be the display of a value
         (from header, regex on body, json path)
 
+    --action-nullable-values
+        If set an action can return null values, else it fails if the result
+        cannot find a value.
+
+    --action-res-delimiter
+        Set the delimiter for action results. Default is ','.
+
     --basic <user:password>
     --user  <user:password>
         Use basic http authentication. Specified in the form user:password
@@ -328,7 +335,7 @@ Actions
 To simplify some post-processing on the retrieved resources, you can specify an action to be performed on the result.
 Action can be of type:
 
-* print: display a response header value, a json or xml response attribute
+* print: display a response header value (multiple values supported, separated by comas), a json or xml response attribute
     * you can specify a pseudo path similar to xpath
     * there is a limited set of functions that you can use as the last element of path:
         * `length()` returns the number of element of an array, or the number of keys for a an object

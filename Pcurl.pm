@@ -124,6 +124,7 @@ my @getopt_defs = (
     'accept=s',
     'action=s',
     'action-nullable-values',
+    'action-res-delimiter=s',
     'basic|user=s',
     'content=s',
     'cookie|b=s',
@@ -1596,7 +1597,12 @@ sub perform_action {
     my ($action, $url, $resp, $discovered_links, $store_result) = @_;
 
     if ($action->{what} eq 'header'){
-        my $res = $resp->{headers}{lc $action->{value}};
+        my $vals = $action->{value};
+        my $sep = $args{'action-res-delimiter'} || ',';
+        $sep =~ s/\\n/\n/;
+        # $sep =~ s/\\r/\r/;
+        $sep =~ s/\\t/\t/;
+        my $res = join($sep, map{ $resp->{headers}{lc $_} } split(/,/, $vals) );
         if ($store_result){
             $resp->{action_result} = $res; 
         } else {
@@ -3523,6 +3529,14 @@ Specify an accepted MIME type. This is simply a shortcut for -H 'Accept: your/ty
 =item --action <spec>
 
 Perform an action on the response. It can be the display of a value (from header, regex on body, json path).
+
+=item --action-nullable-values
+
+If set an action can return null values, else it fails if the result cannot find a value.
+
+=item --action-res-delimiter
+
+Set the delimiter for action results. Default is ','.
 
 =item --basic, --user <user:password>
 
