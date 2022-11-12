@@ -902,10 +902,10 @@ sub process_file {
 sub send_http_request {
     my ($IN, $OUT, $ERR, $headers, $body) = @_;
     
-    if ($args{verbose}){
+    push @$headers, '';         # empty line to terminate request
+    if ($args{verbose} || $args{debug}){
         print STDERR "> $_\n" for @$headers;
     }
-    push @$headers, '';         # empty line to terminate request
 
     my $headers_txt = join "", map { "$_\r\n" } @$headers;
     print $OUT $headers_txt;    # send headers to server
@@ -916,10 +916,14 @@ sub send_http_request {
         if (ref $body eq 'HASH'){
             if (exists $body->{data}){
                 print $OUT $body->{data};
+                print {current_output} $body->{data} if $args{'include-request'} || $args{debug};
                 $sent = $body->{size};
             } 
         } else {
-            print $OUT $body if $body;
+            if ($body){
+                print $OUT $body;
+                print {current_output} $body if $args{'include-request'} || $args{debug};
+            }
             $sent = length $body;
         }
         say STDERR "* upload completely sent off: $sent bytes" if $args{verbose} || $args{debug};
@@ -1315,7 +1319,7 @@ sub process_http_response_headers {
         $resp{captured_head} = \$head_buf;
     }
     say STDERR "* end of response head" if $args{debug};
-    say STDERR "Parsed cookies: ", Dumper $cookies if $args{debug};
+    say STDERR "Parsed cookies: ", Dumper $cookies if $cookies && $args{debug};
     return \%resp;
 }
 
@@ -1362,12 +1366,14 @@ sub process_http_response_body {
         foreach my $fh (@ready) {
             if ($ERR && (fileno($fh) == fileno($ERR))) {
                 my $line = <$fh>;
-                $line =~ s/[\r\n]+$//;
-                say STDERR "* proxy/tunnel STDERR: $line" if $args{debug};
-                if ($url_final->{tunneled} && ($line =~ /^s_client: HTTP CONNECT failed: (\d+) (.*)/)){
-                    my $err_txt = sprintf("Received '%d %s' from tunnel after CONNECT", $1, $2);
-                    say STDERR $err_txt;
-                    exit 5;
+                if ($line){
+                    $line =~ s/[\r\n]+$//;
+                    say STDERR "* proxy/tunnel STDERR: $line" if $args{debug};
+                    if ($url_final->{tunneled} && ($line =~ /^s_client: HTTP CONNECT failed: (\d+) (.*)/)){
+                        my $err_txt = sprintf("Received '%d %s' from tunnel after CONNECT", $1, $2);
+                        say STDERR $err_txt;
+                        exit 5;
+                    }
                 }
             } elsif (fileno($fh) == fileno($IN)) {
                 say STDERR "* processing STDIN" if $args{debug};
