@@ -698,7 +698,16 @@ sub process_http {
                     }
                     my ($old_scheme, $old_host, $old_port) = ($url_final->{scheme}, $url_final->{host}, $url_final->{port});
 
-                    $url_final = get_redirected_url($url_final, $resp->{headers}{location});
+                    my $redirected_url = get_redirected_url($url_final, $resp->{headers}{location});
+
+                    # check to prevent full site download because of a redirect (eg: a link get a 302 to the root dir)
+                    my $cur = canonicalize($url_final->{url});
+                    my $next = canonicalize($redirected_url->{url});
+                    if (!is_descendant_or_equal($next, $cur) && $args{'no-parent'}){
+                        say STDERR "* ignoring redirected url $redirected_url->{url} from $url_final->{url} because of --no-parent" if $args{verbose} || $args{debug} || $args{'debug-urls'};
+                        goto BREAK;
+                    }
+                    $url_final = $redirected_url;
                     $next_url = $url_final->{url};
                     
                     # compare new url with previous and reconnected if needed
@@ -711,7 +720,7 @@ sub process_http {
                         close $OUT;
                         close $ERR if $ERR;
                     }
-                    say STDERR sprintf("* Redirecting #%d to %s", $max_redirs - $redirs,  $url_final->{url}) if $args{verbose} || $args{debug};
+                    say STDERR sprintf("* Redirecting #%d to %s", $max_redirs - $redirs,  $url_final->{url}) if $args{verbose} || $args{debug} || $args{'debug-urls'};
                     $redirs--;
                 } elsif ($code == 300){
                     # server do not know what to serve
