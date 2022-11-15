@@ -680,7 +680,7 @@ sub process_http {
                                                   url_proxy => $url_proxy,
                                                   out_file  => $fname,
                                                   follow    => $following);
-            print {current_output} ${$resp->{captured_head}} if defined ${$resp->{captured_head}};
+            print {current_output} ${$resp->{captured_head}} if ($args{head} || $args{'include-response'} || $args{verbose}) && defined ${$resp->{captured_head}};
             say STDERR "* received $resp->{head_byte_len} headers bytes" if $args{verbose} || $args{debug};
             say STDERR Dumper $resp if $args{debug};
             if ($resp->{head_byte_len}){
