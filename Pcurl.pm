@@ -3954,7 +3954,7 @@ Specify the maximum number of jump to explore from initial url. Default is 5. 0 
 
 Allow to disable the creation of a common ancestor named after the host name for all retrieved resources.
 
-=item --np, --no-parent
+=item --no-parent, --np
 
 Prevent the crawling to go back to the parent of the given url.
 
