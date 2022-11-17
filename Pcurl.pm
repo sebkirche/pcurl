@@ -795,7 +795,7 @@ sub process_http {
                 && (
                     ($process_action && index($process_action->{what}, 'getlinked') == 0)
                     ||
-                    $args{recursive}
+                    ($args{recursive} && $resp->{status}{code} && $resp->{status}{code} != 404)
                 )){
                 # need to use select as "print current_output ${$resp->{captured}}" prints "GLOB(0x1f75cd8)" (the current_output) to STDOUT
                 # my $old_selected = select current_output;
@@ -1857,7 +1857,7 @@ sub discover_links {
                 (?|
                 <img[^>]+src=\s*(["']?)(.+?)\1
                 |<link[^>]+href=\s*(["']?)(.+?)\1
-                |background-image:\s*url\(([^\)]+)\)
+                |background(?:-image)?:\s*url\((["']?)(.+?)\1\)
                 )}gix; # dumb link collector
 
     my %requisites;
