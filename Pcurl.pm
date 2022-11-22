@@ -3838,6 +3838,10 @@ Define a coma-separated list of domains that ignore the proxy.
 
 Write to file instead of stdout.
 
+=item --parse-only <url>
+
+Debug usage: parse an url and show its attributes.
+
 =item --port <port>
 
 Specify explicitly the port. If not used, we use the port from the url (if specified), or we will try well-known port 80 for HTTP and 443 for HTTPS, depending on the url scheme.
@@ -3957,6 +3961,10 @@ Specify a pattern that will be validated to accept urls
 =item --cut-dirs <number of levels>
 
 Specify a number of path levels to remove from all links.
+
+=item --debug-urls
+
+Show urls discovered in each html/css file when running in recursive mode.
 
 =item --directory-prefix <common path>
 
