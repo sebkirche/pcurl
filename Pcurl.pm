@@ -35,6 +35,10 @@ use Time::Local;
 our $VERSION = '0.9.9';
 $|++; # auto flush messages
 
+# vars declared before signal handlers because we show a message using them
+my %args;
+my %processed_request;          # Requests done, for not doing again
+
 # -------- Signal handlers -------------------------
 BEGIN{                          # automagic breakpoint for warnings when script is run by perl -d
     $SIG{__WARN__} = sub {
@@ -45,8 +49,25 @@ BEGIN{                          # automagic breakpoint for warnings when script 
         $DB::single = 1;        # we stop execution if a warning occurs during run
     };
 }
-$SIG{INT}  = sub { say STDERR "SIGINT / CTRL-C received (Interrupt from keyboard). Leaving."; exit };
-$SIG{QUIT} = sub { say STDERR "SIGQUIT / CTRL-\\ received (Quit from keyboard). Leaving."; exit };
+sub tell_recursive {
+    if ($args{recursive}){
+        say STDERR sprintf("%d link%s processed. Enter Ctrl-C twice to stop.", scalar(keys %processed_request), (scalar keys %processed_request > 1 ? 's' : '')) if $args{recursive};
+    }
+}
+$SIG{INT}  = sub {
+    state $last_time = 0;
+    my $now = time;
+    if ($now - $last_time <= 1){ # Ctrl-C x2 within 1 second
+        say STDERR "SIGINT / CTRL-C received (Interrupt from keyboard). Leaving.";
+        exit;
+    }
+    tell_recursive();
+    $last_time = $now;
+};
+$SIG{QUIT} = sub {
+    tell_recursive();
+    say STDERR "SIGQUIT / CTRL-\\ received (Quit from keyboard). Leaving.";
+    exit };
 $SIG{ABRT} = sub { say STDERR "SIGABRT received (Probable abnormal process termination requested by a library). Leaving."; exit };
 $SIG{TERM} = sub { say STDERR "SIGTERM received - External termination request. Leaving."; exit };
 sub suspend_trap {
@@ -94,7 +115,7 @@ my @output_stack = ( *STDOUT );
 
 my ($http_vers, $tunnel_pid, $auto_ref, $use_cookies, $cookies, $process_action);
 my %rel_url_to_local_dir;
-my %args;
+
 my $index_name;
 my $acceptrx;
 my $rejectrx;
@@ -102,7 +123,6 @@ my $prefix = '';
 my %broken_url;                 # URLs that are not valid
 my %failed_url;                 # URLs that resulted in failure
 my %discovered_url;
-my %processed_request;          # Requests done, for not doing again
 my $asset_counter = 0;
 
 %args = ( 'tcp-nodelay'      => 1,
