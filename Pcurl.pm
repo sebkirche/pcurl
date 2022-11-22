@@ -1247,7 +1247,7 @@ sub process_http_response_headers {
         foreach my $fh (@ready) {
             if ($ERR && (fileno($fh) == fileno($ERR))) {
                 my $line = <$fh>;
-                $line =~ s/[\r\n]+$//;
+                $line =~ s/[\r\n]+$// if $line;
                 say STDERR "* proxy/tunnel STDERR: $line" if $args{debug};
                 if ($url_final->{tunneled} && ($line =~ /^s_client: HTTP CONNECT failed: (\d+) (.*)/)){
                     my $err_txt = sprintf("Received '%d %s' from tunnel after CONNECT", $1, $2);
