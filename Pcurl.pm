@@ -794,7 +794,7 @@ sub process_http {
         my $need_capture;
         if ($params{capture}
             || (defined $process_action && !$process_action->{done})
-            || ($args{recursive} && $resp->{headers}{'content-type'} && $resp->{headers}{'content-type'} =~ m{(text/html|text/css)})){
+            || ($args{recursive} && $resp->{headers}{'content-type'} && $resp->{headers}{'content-type'} =~ m{(text/html|application/xhtml|text/css|application/javascript)})){
             $need_capture = 1;
         }
         
@@ -817,7 +817,10 @@ sub process_http {
                     perform_action($process_action, $url_final, $resp, $discovered_links, ($params{capture} ? $params{capture} == 1 : 0));
                     $process_action->{done} = 1;
                 }
-            } elsif ($resp->{headers}{'content-type'} && $resp->{headers}{'content-type'} =~ '(text/html|text/css)'){
+            } elsif ($resp->{headers}{'content-type'}
+                     && $resp->{headers}{'content-type'} =~ '(text/html|application/xhtml|text/css|application/javascript)'
+                     && !$discard_output_creation
+                ){
                 if ($discovered_links){
                     push @$discovered_links, discover_links($resp, $url_final, $acceptrx, $rejectrx, !$args{'recursive-flat'});
                 }
@@ -1880,6 +1883,8 @@ sub discover_links {
     my ($resp, $url, $acc, $rej, $keep_tree) = @_;
     return () unless $resp->{captured} && ${$resp->{captured}};
 
+    say STDERR "Discovering urls in $url->{url}" if $args{debug} || $args{'debug-urls'};
+    
     # TODO: look only for img/css for first url, unless --page-requisites
 
     my @links = grep { defined && ! /^["']$/ } ${$resp->{captured}} =~ m{
@@ -2018,10 +2023,12 @@ sub discover_links {
             # say STDERR "* adding $u to discoverd urls" if $args{verbose} || $args{debug};
             push @discovered_urls, $u;
             $discovered_url{$u}++;
+        } else {
+            say STDERR "Ignoring duplicate: $u" if $args{debug} || $args{'debug-urls'};
         }
         
     }
-    say STDERR sprintf("Discovered %d urls:\n%s",
+    say STDERR sprintf("Discovered %d urls\n%s",
                        scalar(@discovered_urls),
                        join("\n", @discovered_urls)) if $args{verbose} || $args{'debug-urls'};
     # if ($args{verbose}){
