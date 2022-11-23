@@ -52,7 +52,7 @@ BEGIN{                          # automagic breakpoint for warnings when script 
 }
 sub tell_recursive {
     if ($args{recursive}){
-        say STDERR sprintf("%d link%s processed. Enter Ctrl-C twice to stop.", scalar(keys %processed_request), (scalar keys %processed_request > 1 ? 's' : '')) if $args{recursive};
+        say STDERR sprintf("\n%d link%s processed. Enter Ctrl-C twice to stop.", scalar(keys %processed_request), (scalar keys %processed_request > 1 ? 's' : '')) if $args{recursive};
     }
 }
 $SIG{INT}  = sub {
