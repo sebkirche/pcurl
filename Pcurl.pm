@@ -782,8 +782,9 @@ sub process_http {
         if (!$redirect_pending
             && !$discard_output_creation
             && ($args{output}
-            || $args{'remote-name'}
-            || $args{recursive})){
+                || $args{'remote-name'}
+                || $args{recursive})){
+            $out_file = urldecode($out_file);
             make_path($out_file);
             redirect_output_to_file($out_file);
         }
@@ -1454,7 +1455,7 @@ NO_BIN
                 if ($fname){
                     # we received the name from server
                     # we should not have redirected in this case
-                    redirect_output_to_file("${prefix}${fname}");
+                    redirect_output_to_file(urldecode("${prefix}${fname}"));
                     $response->{redirected} = "${prefix}${fname}";
                 }
                 
@@ -1923,6 +1924,9 @@ sub discover_links {
         # remove fragment (avoid duplicates)
         $r =~ s/#.*$//;
 
+        # fix urls with spaces
+        $r =~ s/ /%20/g;
+        
         next RES unless $r;           # url without fragment is empty
         next RES if $dups{$r};        # avoid multiple downloads
         next RES if $r =~ /^mailto:/; # avoid mail links
