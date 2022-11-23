@@ -29,6 +29,7 @@ use MIME::Base64 'encode_base64';
 use Pod::Usage;
 use Socket qw( IPPROTO_TCP TCP_NODELAY );
 use Symbol qw( gensym );
+use Time::HiRes qw( sleep );
 use Time::Local;
 # use Carp::Always;
 
@@ -184,6 +185,7 @@ my @getopt_defs = (
     'proxy-user|U=s',
     'proxy10=s',
     'proxy|x=s',
+    'random-wait',
     'remote-header-name|J',
     'remote-name|O',
     'remote-time|R',
@@ -206,6 +208,7 @@ my @getopt_defs = (
     'user-agent|A=s',
     'verbose|v',
     'version|V',                # comment this out to have the built-in version handler that shows program/Getopt/Perl versions
+    'wait|w=i',
     # 'xml-decl=s',
     'xml-pp',
     'xml-pp-indent=i',
@@ -578,6 +581,15 @@ sub process_http {
   REDIRECT:
         # we can loop in case of 3xx redirect
     do {
+        if ($args{wait}){
+            my $delay = $args{wait};
+            if ($args{'random-wait'}){
+                my $f = sprintf("%.1f", (rand(1) + .5)); # factor is 0.5 .. 1.5
+                $delay *= $f;
+            }
+            sleep($delay);
+        }
+        
         say STDERR "* Processing url $url_final->{url}" if $args{verbose} || $args{debug};
         $next_url = '';
 
@@ -3866,6 +3878,10 @@ Set the proxy authentication. Only Basic Auth is supported.
 
 Specify a string for the referer. If followed by ";auto", when following redirections, reuse the previous url as referer. ";auto" can also be used alone with redirections.
 
+=item --random-wait
+
+When using --wait, randomize the delay between 0.5 and 1.5 times
+
 =item -J, --remote-header-name
 
 With -O --remote-name, use the name provided by Content-disposition: filename instead of URL.
@@ -3941,6 +3957,10 @@ Number of space characters for each indentation level. Default is 2
 =item --xml-root-element <name>
 
 Use the given name for the root element of XML.
+
+=item -w, --wait <seconds>
+
+Wait between each request.
 
 =back
 
