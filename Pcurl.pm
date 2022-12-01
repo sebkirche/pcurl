@@ -446,7 +446,11 @@ sub process_loop {
                 # response might be undef after timeout
                 $failed_url{$req} = $r->{status}{code} if defined $r->{status} && $r->{status}{code} >= 400 && $r->{status}{code} <= 599;
                     
-                say STDERR sprintf("%s -> %s", $url->{url}, humanize_bytes($r->{body_byte_len})) if $r->{body_byte_len} && ($args{progression} || $args{verbose} || $args{debug});
+                say STDERR sprintf("%s -> %d / %s",
+                                   $url->{url},
+                                   $r->{status}{code},
+                                   humanize_bytes($r->{body_byte_len})
+                    ) if $r->{body_byte_len} && ($args{progression} || $args{verbose} || $args{debug});
             }
             $processed_request{$req}++;
             
@@ -572,7 +576,7 @@ sub process_http {
         $process_action = parse_process_action($args{action});
         $process_action->{done} = undef;
     }
-
+    
     my $fname;
     my $out_file;
 
