@@ -1896,24 +1896,12 @@ sub discover_links {
                 <img[^>]+src=\s*(["']?)(.+?)\1
                 |<link[^>]+href=\s*(["']?)(.+?)\1
                 |background(?:-image)?:\s*url\((["']?)(.+?)\1\)
+                |import \s+ .* \s+ from \s+ "([^"]+)";
                 )}gix; # dumb link collector
 
     my %requisites;
     map { $requisites{$_}++ } @resources;
-    my @reqs;
-    if ($acc || $rej){
-        if ($acc){
-            say STDERR "grepping accept on $acc" if $args{debug};
-            @links     = grep { /$acc/ } @links;
-            @resources = grep { /$acc/ } @resources;
-        }
-        if ($rej){
-            say STDERR "grepping reject on $rej" if $args{debug};
-            @links     = grep { ! /$rej/ } @links;
-            @resources = grep { ! /$rej/ } @resources;
-        }            
-    }
-    @reqs = (@links, @resources);
+    my @reqs = (@links, @resources);
     
     # say for @reqs;
     my @discovered_urls;
@@ -2006,6 +1994,22 @@ sub discover_links {
             # nothing special
         } elsif (!is_descendant_or_equal($canon, $current_path) && $args{'no-parent'}){
             next;
+        }
+
+        # process rejection patterns
+        if ($acc || $rej){
+            if ($acc){
+                if ($canon !~ /$acc/){
+                    say STDERR "Rejecting: $canon does NOT match $acc" if $args{debug} || $args{'debug-urls'};
+                    next;
+                }
+            }
+            if ($rej){
+                if ($canon =~ /$rej/){
+                    say STDERR "Rejecting: $canon does MATCH $rej" if $args{debug} || $args{'debug-urls'};
+                    next;
+                }
+            }
         }
         
         $p = $canon;
