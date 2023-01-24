@@ -1386,6 +1386,7 @@ sub process_http_response_body {
     my $status_done = 0;        # flag to know if we have processed the status
     my $received = 0;           # counter for total bytes received
     my $chunked_mode = 0;       # flag set when chunked mode
+    my $utf8_bom = 0;           # flag to put Utf-8 BOM in file
     my $content_length = 0;     # size of response, according to the response header
     my $resp_buf;               # buffer to store response instead of STDOUT/file
 
@@ -1427,8 +1428,13 @@ sub process_http_response_body {
             } elsif (fileno($fh) == fileno($IN)) {
                 say STDERR "* processing STDIN" if $args{debug};
                                 
-                # avoid unwanted binary output
                 if ($response->{headers}{'content-type'}){
+                    # add UTF-8 BOM when encoding says so
+                    if ($response->{headers}{'content-type'} =~ /charset=utf-8/){
+                        $utf8_bom = 1;
+                    }
+                    
+                    # avoid unwanted binary output
                     if ($response->{headers}{'content-type'} =~ /charset=binary/){
                         if (!$args{output}
                             && (!$args{'remote-name'} && !$args{'remote-header-name'})
@@ -1471,6 +1477,11 @@ NO_BIN
                 say STDERR "* Ignoring the response-body" if ($is_redirected && $args{location}) && (! $fh->eof ) && ($args{verbose} || $args{debug});
                 binmode($out, ":raw"); # pass in raw layer to prevent utf8 or cr/lf conversion in binary files
 
+                if ($utf8_bom){
+                    # insert BOM if encoding was specified
+                    print $out "\x{ef}\x{bb}\x{bf}";
+                }
+                
                 $content_length = $response->{headers}{"content-length"};
                 if (defined $content_length){                                         
                     say STDERR "* need to read $content_length bytes in response" if $args{debug};
