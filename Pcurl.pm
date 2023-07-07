@@ -1512,7 +1512,11 @@ NO_BIN
                                 $prog += $bytes;
                                 my $pchars = $BAR_LENGTH / $content_length * $prog;
                                 my $pct = 100 / $content_length * $prog;
-                                print STDERR sprintf("\r%s: %s%s %.1f%%", $output_name || $fname, '#' x int($pchars), '.' x ($BAR_LENGTH - int($pchars)), $pct);
+                                print STDERR sprintf("\r%s: %s%s %.1f%% of %s", $output_name || $fname,
+                                                     '#' x int($pchars),
+                                                     '.' x ($BAR_LENGTH - int($pchars)),
+                                                     $pct,
+                                                     humanize_bytes($content_length));
                                 flush STDERR;
                             }
                             say STDERR "* Read $bytes bytes" if $args{debug};
