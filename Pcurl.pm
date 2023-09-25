@@ -127,6 +127,9 @@ my %discovered_url;
 my $asset_counter = 0;
 
 %args = ( 'tcp-nodelay'      => 1,
+          'data'             => [],
+          'data-binary'      => [],
+          'data-raw'         => [],
           'data-urlencode'   => [],
           header             => [],
           'json-pp-indent'   => 2,
@@ -150,10 +153,10 @@ my @getopt_defs = (
     'content=s',
     'cookie|b=s',
     'cookie-jar|c=s',
-    'data-binary=s',
+    'data|data-ascii|d=s@',
+    'data-binary=s@',
     'data-raw=s',
     'data-urlencode=s@',
-    'data|data-ascii|d=s',
     'debug',
     'debug-urls',
     'debug-json=s',
@@ -179,6 +182,7 @@ my @getopt_defs = (
     'max-redirs=i',
     'noproxy=s',
     'output|o=s',
+    'octet-stream',
     'parse-only',               # just show how we parse the URL
     'port|p=i',
     'progression|progress',
@@ -318,7 +322,12 @@ if ($args{accept}){
 if ($args{json}){
     push @{$args{header}}, "Content-Type: application/json";
     push @{$args{header}}, "Accept: application/json";
-    $args{data} = $args{json};
+    push @{$args{data}}, $args{json};
+}
+
+# shortcut for Content-Type: octet-stream
+if ($args{'octet-stream'}){
+    $args{content} = 'octet-stream' unless $args{content};
 }
 
 my $cli_url = $args{url} || $ARGV[0];
@@ -429,7 +438,7 @@ sub process_loop {
             }
             
             my $method;
-            if ($args{data} || @{$args{'data-urlencode'}} || $args{'data-binary'} || $args{'data-raw'}){
+            if (@{$args{data}} || @{$args{'data-urlencode'}} || @{$args{'data-binary'}} || @{$args{'data-raw'}}){
                 $method = $args{request} || 'POST';
             } else {
                 $method = $args{head} ? 'HEAD' : $args{request} || 'GET';
@@ -758,11 +767,11 @@ sub process_http {
                     }
                     say STDERR sprintf("* Redirecting #%d to %s", $max_redirs - $redirs,  $url_final->{url}) if $args{verbose} || $args{debug} || $args{'debug-urls'};
                     $redirs--;
-                } elsif ($code == 300){
+                } elsif ($code && $code == 300){
                     # server do not know what to serve
                     say STDERR "* 300 'Multiple Choices' on $url_final->{url}" if $args{verbose} || $args{debug};
                     $discard_output_creation = 1;
-                } elsif ($code >= 400 && $code <= 599){
+                } elsif ($code && $code >= 400 && $code <= 599){
                     # something is wrong
                     say STDERR "* $code on $url_final->{url}" if $args{verbose} || $args{debug};
                     if ($args{fail} || $args{'fail-with-body'}){
@@ -1142,61 +1151,80 @@ sub add_http_header {
 
 # When POSTing data, compute length, content-type and data to POST
 sub prepare_http_body_to_post{
-    my $post = $args{data} || $args{'data-binary'} || $args{'data-raw'};
     my $buf;
-    
-    if ($post){
-        if ($args{'data-raw'}){
-            return $args{'data-raw'}; # we do not interpret the @ in raw mode
-        } elsif ($post =~ /^@(.*)/){
-            if ($1){
-                my $fd;
-                if ($1 eq '-'){
-                    $fd = *STDIN;
-                } elsif (-e $1){
-                    open $fd, '<', $1 or die "cannot open $1: $!";
+    my @parts;
+
+  TYPES:
+    for my $type (qw(data data-binary data-raw data-urlencode)){
+      PART:
+        for my $data (@{$args{$type}}){
+            if ($type eq 'data-raw'){
+                push @parts, $data; # we do not interpret data
+            } else {
+                my $part;
+                if ($data =~ /^(\w*)@(.*)/){ # if we have a file argument
+                    my $fd;
+                    if ($2 eq '-'){
+                        $fd = *STDIN;
+                    } elsif (-e $2){
+                        open $fd, '<', $2 or die "cannot open $2: $!";
+                    } else {
+                        # file does not exist
+                        say STDERR "Warning: Couldn't read data from file \"$1\", this makes an empty POST.";
+                        # return { kind => 'empty',
+                                 # ctype => 'application/x-www-form-urlencoded'
+                        # };
+                        push @parts, '';
+                        next PART;
+                    }
+
+                    if ($type eq 'data'){
+                        while (my $l = <$fd>){
+                            $l =~ s/[\r\n]+//g; # data do not have crlf
+                            $part .= $l;
+                        }
+                    } else {
+                        my $buf_size = 1024 * 1024;
+                        while(my $bytes = $fd->sysread($buf, $buf_size)){
+                            $part .= $buf;
+                        }
+                        if ($type eq 'data-urlencode'){
+                            if ($1){
+                                $part = $1 . '=' . $part;
+                            } else {
+                                $part = urlencode($part);
+                            }
+                        }
+                    }
+
+                    close $fd unless fileno($fd) == fileno(STDIN);
+
+                    push @parts, $part;
+
                 } else {
-                    # file does not exist
-                    say STDERR "Warning: Couldn't read data from file \"$1\", this makes an empty POST.";
-                    return { kind => 'empty',
-                             ctype => 'application/x-www-form-urlencoded'
-                    };
-                }
-                my $data;
-                if ($args{data}){
-                    while (my $l = <$fd>){
-                        $l =~ s/[\r\n]+//g;
-                        $data .= $l;
-                    }
-                } elsif ($args{'data-binary'}){
-                    my $buf_size = 1024 * 1024;
-                    while(my $bytes = $fd->sysread($buf, $buf_size)){
-                        # syswrite $OUT, $buf, $bytes;
-                        # $sent += $bytes;
-                        $data .= $buf;
+                    # we have a plain argument
+                    if ($type eq 'data' || $type eq 'data-binary'){
+                        push @parts, $data;
+                    } else {
+                        # data-urlencode
+                        $data =~ /(\w*=)?(.*)/;
+                        if ($1 && $1 ne '='){
+                            push @parts, "$1" . urlencode($2);
+                        } else {
+                            push @parts, urlencode($2);
+                        }
                     }
                 }
-                close $fd unless fileno($fd) == fileno(STDIN);
-                
-                return {
-                    size => length $data,
-                    ctype => 'application/x-www-form-urlencoded',
-                    data => $data
-                };
             }
-        } else {
-            return $args{data}; # it's a plain text 
-        }        
-    } elsif (@{$args{'data-urlencode'}}){
-        my @encoded;
-        for my $data (@{$args{'data-urlencode'}}){
-            $data =~ s/^(\w+)=(.*)/"$1=" . urlencode($2)/e;
-            push @encoded, $data;
-        }
-        return join('&', @encoded);
-    } else {
-        return undef;
-    }
+      } #PART
+  } #TYPES
+    my $res = join '&', @parts;
+    return {
+        ctype => 'application/x-www-form-urlencoded',
+        $res ? ( size => length $res,
+                 data => $res )
+            : ( kind => 'empty' )
+    };
 }
 
 sub build_http_proxy_headers {
@@ -1269,7 +1297,7 @@ sub process_http_response_headers {
                 my $line = <$fh>;
                 $line =~ s/[\r\n]+$// if $line;
                 say STDERR "* proxy/tunnel STDERR: $line" if $args{debug};
-                if ($url_final->{tunneled} && ($line =~ /^s_client: HTTP CONNECT failed: (\d+) (.*)/)){
+                if ($url_final->{tunneled} && $line && ($line =~ /^s_client: HTTP CONNECT failed: (\d+) (.*)/)){
                     my $err_txt = sprintf("Received '%d %s' from tunnel after CONNECT", $1, $2);
                     say STDERR $err_txt;
                     exit 5;
@@ -1493,8 +1521,14 @@ NO_BIN
                 my $prog = 0;   # accumulator for progression
                 my $chunk_len;
                 my $buf;
+                my $BAR_LENGTH = 72;
               CHUNK:
                 while (! $fh->eof){ # loop on the remaining of response
+                    print STDERR sprintf("\r%s: %s%s %.1f%% of %s", $output_name || $fname,
+                                         '',
+                                         '.' x $BAR_LENGTH,
+                                         0,
+                                         humanize_bytes($content_length)) if defined($content_length) && $args{progression} && !$args{debug};
                     if ($chunked_mode){
                         my $line = <$fh>;
                         last CHUNK unless defined $line;
@@ -1508,7 +1542,6 @@ NO_BIN
                         my $bytes = $fh->read($buf, $buf_size);
                         if ($bytes){
                             if (defined($content_length) && $args{progression} && !$args{debug}){
-                                my $BAR_LENGTH = 72;
                                 $prog += $bytes;
                                 my $pchars = $BAR_LENGTH / $content_length * $prog;
                                 my $pct = 100 / $content_length * $prog;
@@ -2808,7 +2841,8 @@ sub str2epoch {
 # perform a string encoding compatible with url
 sub urlencode {
     my $s = shift;
-    $s =~ s/([^A-Za-z0-9])/sprintf("%%%02X", ord($1))/eg;
+    $s =~ s/ /+/g;
+    $s =~ s/([^A-Za-z0-9+])/sprintf("%%%02X", ord($1))/eg;
     return $s;
 }
 
@@ -3782,19 +3816,19 @@ Save cookies into a 'Netscape cookie format' file, or if the given file is '-', 
 
 =item -d, --data, --data-ascii <data>
 
-Define some data that will be POSTed to the server. If data starts with '@', the rest of the string will be taken as a file name whose content will be send as request body. If using '-' as file name, the data will be read from standard input (so you can pipe it from another command). Note that CR+LF characters will be discarded from the output. See --data-binary if you need to send unaltered data.
+Define some data that will be POSTed to the server. If data starts with '@', the rest of the string will be taken as a file name whose content will be send as request body. If using '-' as file name, the data will be read from standard input (so you can pipe it from another command). Note that CR+LF characters will be discarded from the output. See --data-binary if you need to send unaltered data. You can repeat that parameter.
 
 =item --data-binary <data>
 
-Similar to --data, but do not discard CR+LF characters. When reading from a file, perform binary read.
+Similar to --data, but do not discard CR+LF characters. When reading from a file, perform binary read. You can repeat that parameter.
 
 =item --data-raw <data>
 
-Similar to --data, but do not interpret an initial '@' character.
+Similar to --data, but do not interpret an initial '@' character. You can repeat that parameter.
 
 =item --data-urlencode <data>
 
-Similar to --data-raw, but the data will be url-encoded.
+Similar to --data-raw, but the data will be url-encoded. You can repeat that parameter.
 
 =item -f, --fail
 
@@ -3923,6 +3957,10 @@ With -O --remote-name, use the name provided by Content-disposition: filename in
 =item -O, --remote-name
 
 Write output to a file named as the remote file (that name is extracted from the URL).
+
+=item --octet-stream
+
+Shortcut for Content-Type: octet-stream.
 
 =item -R, --remote-time
 
