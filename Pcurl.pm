@@ -1223,7 +1223,7 @@ sub prepare_http_body_to_post{
         ctype => 'application/x-www-form-urlencoded',
         $res ? ( size => length $res,
                  data => $res )
-            : ( kind => 'empty' )
+            : ( kind => 'empty', size => 0 )
     };
 }
 
