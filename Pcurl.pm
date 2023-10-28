@@ -335,6 +335,14 @@ unless ($cli_url){
     say STDERR "No url provided...";
     pod2usage(-exitval => 1);
 }
+unless ($cli_url =~ m{^\w+://}){
+    # mimics curl: no scheme means http
+    if ($cli_url =~ m{/$}){
+        $cli_url = "http://$cli_url";
+    } else {
+        $cli_url = "http://$cli_url/";
+    }
+}
 
 $acceptrx = $args{'accept-regex'};
 $rejectrx = $args{'reject-regex'};
