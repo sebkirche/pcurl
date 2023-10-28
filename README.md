@@ -1,7 +1,7 @@
 pCurl - a cURL-like implemented in Perl
 =======================================
 
-pCurl goal is to provide a self-contain Perl curl-like tool capable of making http(s) requests and parse JSON results without the need for additional tools or Perl packages (i am cheating for https by calling openSSL for tunnelling).
+pCurl goal is to provide a self-contain Perl curl-like tool capable of making http(s) requests, doing some recursive web hovering (similar to `wget --recursive`) and parse JSON and XML results without the need for additional tools or Perl packages (I am cheating for https by calling `openSSL s_client` for tunnelling).
 
 I support the following protocols:
 * `http:` and `https:` with all GET, HEAD, POST, PUT, TRACE, OPTIONS, DELETE or other custom actions
@@ -26,7 +26,7 @@ Perl limited dependencies are:
 * MIME::Base64
 * Pod::Usage
 * Time::Local
-* locally available openSSL
+* locally system available openSSL
 
 pCurl tries to supports (a small subset of) cURL command line parameters, cookies, additional parameters as shortcuts to standard curl parameters like 
 
