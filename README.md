@@ -167,6 +167,10 @@ Options
     -o, --output <file>
         Write to file instead of stdout.
 
+    --octet-stream
+        Shortcut for "--content octet-stream", will result in a
+        "Content-Type: octet-stream" header.
+
     --port <port>
         Specify explicitly the port. If not used, we use the port from the
         url (if specified), or we will try well-known port 80 for HTTP and

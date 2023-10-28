@@ -3918,6 +3918,10 @@ Define a coma-separated list of domains that ignore the proxy.
 
 Write to file instead of stdout.
 
+=item --octet-stream
+
+Shortcut for "--content octet-stream", will result in a "Content-Type: octet-stream" header.
+
 =item --parse-only <url>
 
 Debug usage: parse an url and show its attributes.
@@ -3957,10 +3961,6 @@ With -O --remote-name, use the name provided by Content-disposition: filename in
 =item -O, --remote-name
 
 Write output to a file named as the remote file (that name is extracted from the URL).
-
-=item --octet-stream
-
-Shortcut for Content-Type: octet-stream.
 
 =item -R, --remote-time
 
