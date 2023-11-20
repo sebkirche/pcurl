@@ -1124,15 +1124,8 @@ sub build_http_request_headers {
         add_http_header($headers, \%custom, 'Content-Type', $args{content}) if defined $args{content};
         
         if (defined $body){
-            if (ref $body eq 'HASH'){
-                # if ($body->{kind} eq 'stdin'){
-                    add_http_header($headers, \%custom, 'Content-Length', $body->{size});
-                    add_http_header($headers, \%custom, 'Content-type', $body->{ctype}) unless defined $args{content};
-                # }
-            } else {
-                add_http_header($headers, \%custom, 'Content-Length', length $body);
-                add_http_header($headers, \%custom, 'Content-type', 'application/x-www-form-urlencoded') unless defined $args{content};
-            }
+            add_http_header($headers, \%custom, 'Content-Length', $body->{size});
+            add_http_header($headers, \%custom, 'Content-type', $body->{ctype}) if $body->{ctype} && !defined $args{content};
         }
         map { push @$headers, $custom{$_} if defined $custom{$_} } keys %custom;
     }
@@ -1228,8 +1221,8 @@ sub prepare_http_body_to_post{
   } #TYPES
     my $res = join '&', @parts;
     return {
-        ctype => 'application/x-www-form-urlencoded',
-        $res ? ( size => length $res,
+        $res ? ( ctype => 'application/x-www-form-urlencoded',
+                 size => length $res,
                  data => $res )
             : ( kind => 'empty', size => 0 )
     };
