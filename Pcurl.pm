@@ -33,7 +33,7 @@ use Time::HiRes qw( sleep );
 use Time::Local;
 # use Carp::Always;
 
-our $VERSION = '0.9.9';
+our $VERSION = '0.9.10';
 $|++; # auto flush messages
 
 # vars declared before signal handlers because we show a message using them
@@ -208,6 +208,7 @@ my @getopt_defs = (
     'tlsv1_1',
     'tlsv1_2',
     'tlsv1_3',
+    'upload-file|T=s',
     'url=s',
     'user-agent|A=s',
     'verbose|v',
@@ -448,6 +449,8 @@ sub process_loop {
             my $method;
             if (@{$args{data}} || @{$args{'data-urlencode'}} || @{$args{'data-binary'}} || @{$args{'data-raw'}}){
                 $method = $args{request} || 'POST';
+            } elsif ($args{'upload-file'}){
+                $method = $args{request} || 'PUT';
             } else {
                 $method = $args{head} ? 'HEAD' : $args{request} || 'GET';
             }
@@ -982,7 +985,7 @@ sub send_http_request {
         if (ref $body eq 'HASH'){
             if (exists $body->{data}){
                 print $OUT $body->{data};
-                print {current_output} $body->{data} if $args{'include-request'} || $args{debug};
+                # print {current_output} $body->{data} if $args{'include-request'} || $args{debug};
                 $sent = $body->{size};
             } 
         } else {
@@ -1154,74 +1157,91 @@ sub add_http_header {
 sub prepare_http_body_to_post{
     my $buf;
     my @parts;
-
-  TYPES:
-    for my $type (qw(data data-binary data-raw data-urlencode)){
-      PART:
-        for my $data (@{$args{$type}}){
-            if ($type eq 'data-raw'){
-                push @parts, $data; # we do not interpret data
-            } else {
-                my $part;
-                if ($data =~ /^(\w*)@(.*)/){ # if we have a file argument
-                    my $fd;
-                    if ($2 eq '-'){
-                        $fd = *STDIN;
-                    } elsif (-e $2){
-                        open $fd, '<', $2 or die "cannot open $2: $!";
-                    } else {
-                        # file does not exist
-                        say STDERR "Warning: Couldn't read data from file \"$1\", this makes an empty POST.";
-                        # return { kind => 'empty',
-                                 # ctype => 'application/x-www-form-urlencoded'
-                        # };
-                        push @parts, '';
-                        next PART;
-                    }
-
-                    if ($type eq 'data'){
-                        while (my $l = <$fd>){
-                            $l =~ s/[\r\n]+//g; # data do not have crlf
-                            $part .= $l;
+    my $res;
+    my $type;
+    
+    if (@{$args{data}} || @{$args{'data-binary'}} || @{$args{'data-raw'}} || @{$args{'data-urlencode'}}){
+      TYPES:
+        for my $type (qw(data data-binary data-raw data-urlencode)){
+          PART:
+            for my $data (@{$args{$type}}){
+                if ($type eq 'data-raw'){
+                    push @parts, $data; # we do not interpret data
+                } else {
+                    my $part;
+                    if ($data =~ /^(\w*)@(.*)/){ # if we have a file argument
+                        my $fd;
+                        if ($2 eq '-'){
+                            $fd = *STDIN;
+                        } elsif (-e $2){
+                            open $fd, '<', $2 or die "cannot open $2: $!";
+                        } else {
+                            # file does not exist
+                            say STDERR "Warning: Couldn't read data from file \"$1\", this makes an empty POST.";
+                            # return { kind => 'empty',
+                            # ctype => 'application/x-www-form-urlencoded'
+                            # };
+                            push @parts, '';
+                            next PART;
                         }
-                    } else {
-                        my $buf_size = 1024 * 1024;
-                        while(my $bytes = $fd->sysread($buf, $buf_size)){
-                            $part .= $buf;
+                        
+                        if ($type eq 'data'){
+                            while (my $l = <$fd>){
+                                $l =~ s/[\r\n]+//g; # data do not have crlf
+                                $part .= $l;
+                            }
+                        } else {
+                            my $buf_size = 1024 * 1024;
+                            while(my $bytes = $fd->sysread($buf, $buf_size)){
+                                $part .= $buf;
+                            }
+                            if ($type eq 'data-urlencode'){
+                                if ($1){
+                                    $part = $1 . '=' . $part;
+                                } else {
+                                    $part = urlencode($part);
+                                }
+                            }
                         }
-                        if ($type eq 'data-urlencode'){
-                            if ($1){
-                                $part = $1 . '=' . $part;
+
+                        close $fd unless fileno($fd) == fileno(STDIN);
+
+                        push @parts, $part;
+
+                    } else {
+                        # we have a plain argument
+                        if ($type eq 'data' || $type eq 'data-binary'){
+                            push @parts, $data;
+                        } else {
+                            # data-urlencode
+                            $data =~ /(\w*=)?(.*)/;
+                            if ($1 && $1 ne '='){
+                                push @parts, "$1" . urlencode($2);
                             } else {
-                                $part = urlencode($part);
+                                push @parts, urlencode($2);
                             }
                         }
                     }
-
-                    close $fd unless fileno($fd) == fileno(STDIN);
-
-                    push @parts, $part;
-
-                } else {
-                    # we have a plain argument
-                    if ($type eq 'data' || $type eq 'data-binary'){
-                        push @parts, $data;
-                    } else {
-                        # data-urlencode
-                        $data =~ /(\w*=)?(.*)/;
-                        if ($1 && $1 ne '='){
-                            push @parts, "$1" . urlencode($2);
-                        } else {
-                            push @parts, urlencode($2);
-                        }
-                    }
                 }
-            }
-      } #PART
-  } #TYPES
-    my $res = join '&', @parts;
+          } #PART
+      } #TYPES
+        $res = join '&', @parts;
+        $type = 'application/x-www-form-urlencoded';
+        
+    } elsif ($args{'upload-file'}){
+        my $file = $args{'upload-file'};
+        die "Upload from STDIN is not yet supported" if $file eq '-';
+        open my $fd, '<', $file or die "Can't open '$file'!";
+        binmode($fd);
+        my $buf_size = 1024 * 1024;
+        while(my $bytes = $fd->sysread($buf, $buf_size)){
+            $res .= $buf;
+        }
+        close $fd;
+    }
+    
     return {
-        $res ? ( ctype => 'application/x-www-form-urlencoded',
+        $res ? ( $type ? (ctype => $type) : (),
                  size => length $res,
                  data => $res )
             : ( kind => 'empty', size => 0 )
@@ -4002,6 +4022,10 @@ Force the usage of TLS v1.2 for openSSL tunneling
 =item --tlsv1_3
 
 Force the usage of TLS v1.3 for openSSL tunneling
+
+=item -T, --upload-file <filename>
+
+Allow to upload a file using the PUT method.
 
 =item --url <url>
 

@@ -1,3 +1,4 @@
+
 pCurl - a cURL-like implemented in Perl
 =======================================
 
@@ -232,6 +233,9 @@ Options
 
     --tlsv1_3
         Force the usage of TLS v1.3 for openSSL tunneling
+
+    -T, --upload-file <filename>
+        Allow to upload a file using the PUT method.
 
     --url <url>
         Specify explicitly the url. If that parameter is not used, we try to
