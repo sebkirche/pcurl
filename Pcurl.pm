@@ -163,6 +163,7 @@ my @getopt_defs = (
     'debug-json-export',
     'fail|f',
     'fail-with-body',
+    'get-curl-command',
     'header|H=s@',
     'head|I',
     'help|h|?',
@@ -364,6 +365,68 @@ if ($args{'parse-only'}){
     } else {
         exit 1;
     }
+}
+
+# try to get the vanilla curl command equivalent
+if ($args{'get-curl-command'}){
+    my @cli = ();
+    # filter out this argument
+    delete @args{qw( get-curl-command json-pp-indent xml-pp-indent xml-root-element)}; # pcurl specific commands
+    
+    unshift @cli, 'curl';
+    if (my $r = delete $args{'request'}){
+        push @cli, "-X '$r'";
+    }
+
+    # headers lines
+    push @cli, map { "-H '$_'" } @{$args{header}};
+    delete $args{header};
+    if (my $a = delete $args{'user-agent'}){
+        push @cli, "--user-agent '$a'";
+    }
+    
+    if (my $c = delete $args{content}){
+        push @cli, "-H 'Content-Type: $c'";
+    }
+    
+    if (my $i = delete $args{'include-response'}){
+        push @cli, "--include";
+    }
+    
+    my $d; # holder of a command-line argument or set of argiments (eg. dataxx are arrays)
+    my $v; # one parameter value
+    if ($d = delete $args{data}){
+        for $v (@$d){
+            push @cli, "--data '$v'" if $v;
+        }
+    }
+    if ($d = delete $args{'data-binary'}){
+        for $v (@$d){
+            push @cli, "--data-binary '$v'" if $v;
+        }
+    }
+    if ($d = delete $args{'data-raw'}){
+        for $v (@$d){
+            push @cli, "--data-raw '$v'" if $v;
+        }
+    }
+    if ($d = delete $args{'data-urlencode'}){
+        for $v (@$d){
+            push @cli, "--data-urlencode '$v'" if $v;
+        }
+    }
+
+    if (my $i = delete $args{'tcp-nodelay'}){
+        push @cli, "--tcp-nodelay";
+    }
+    
+    push @cli, "'$cli_url'";
+    say join ' ', @cli;
+    if (%args){                 # remaining args?
+        print "Unexported:";
+        say Dumper \%args;
+    }
+    exit 0;
 }
 
 process_loop([$cli_url], $args{level} // $max_levels);
@@ -3858,6 +3921,10 @@ Do not continue on 4xx and 5xx results and return an error. Body response is not
 =item --fail-with-body
 
 Do not continue on 4xx and 5xx results and return an error. Body response is returned.
+
+=item --get-curl-command
+
+Get the equivalent curl command line when possible.
 
 =item -I, --head
 
