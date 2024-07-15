@@ -748,9 +748,9 @@ sub process_http {
         if ($url_proxy){
             if ($url_final->{scheme} eq 'https' && $url_proxy->{auth}){
                 # try to get the openSSL version
-                my $ver = `openssl version` or die "Cannot get openssl version: $!";
-                chomp $ver;
-                say STDERR "* https tunelling via openSSL is unlikely to work unless openSSL is v3.0-beta1 (found $ver)!";
+                # my $ver = `openssl version` or die "Cannot get openssl version: $!";
+                # chomp $ver;
+                # say STDERR "* https tunelling via openSSL is unlikely to work unless openSSL is v3.0-beta1 (found $ver)!";
             }
             $pheaders = build_http_proxy_headers($url_proxy, $url_final);
             $url_final->{proxified} = 1 if $url_final->{scheme} eq 'http'; # direct
@@ -771,7 +771,8 @@ sub process_http {
 
         my $body = prepare_http_body_to_post();
         my $headers = build_http_request_headers($method, $url_final, $url_proxy, $body);
-        if ($url_final->{proxified} && @$pheaders){
+        if (#$url_final->{proxified} &&
+            @$pheaders){
             # ask proxy to connect
             send_http_request($IN, $OUT, $ERR, $pheaders, undef);
             my $presp = process_http_response_headers(IN  => $IN,
@@ -1316,7 +1317,7 @@ sub build_http_proxy_headers {
     my $u = shift;              # url to retrieve
     my $headers = [];
 
-    if ($u->{scheme} eq 'https'){
+    # if ($u->{scheme} eq 'https'){
         if ($args{proxy10} || HTTP10()){
             push @$headers, "CONNECT $u->{host}:$u->{port} HTTP/1.0";
         } elsif (HTTP11()){
@@ -1324,7 +1325,7 @@ sub build_http_proxy_headers {
         }
         push @$headers, "Host: $u->{host}:$u->{port}";
         push @$headers, "User-Agent: " . $args{'user-agent'};
-    }
+    # }
     
     my $auth = $args{'proxy-user'} || ($p->{auth} ? $p->{auth}->{user} . ':' . $p->{auth}->{password} : undef);
     push @$headers, 'Proxy-Authorization: Basic ' . encode_base64($auth, '') if $auth;
@@ -2972,19 +2973,23 @@ sub connect_direct_socket {
 # for HTTPS, we are "cheating" by creating a tunnel with OpenSSL in s_client mode
 sub connect_ssl_tunnel {
     my ($dest, $proxy) = @_;
-    my ($host, $port, $phost, $pport);
+    my ($host, $port, $phost, $pport, $puser, $ppass);
     $host = $dest->{host};
     $port = $dest->{port};
     if ($proxy){
         $phost = $proxy->{host};
         $pport = $proxy->{port};
+        $puser = $proxy->{auth}->{user};
+        $ppass = $proxy->{auth}->{password};
     }
     my $ossl_version = `openssl version`;
+    chomp $ossl_version;
     
     my $cmd = "openssl s_client -connect ${host}:${port} -servername ${host} -quiet";# -quiet -verify_quiet -partial_chain';
     $cmd .= ' -4' if ($ossl_version =~ /^\w+ 3/); # use IPv4 only (unsupported by OpenSSL 1.02)
     $cmd .= ' -no_check_time' if $args{insecure}; # useless?
     $cmd .= " -proxy ${phost}:${pport}" if $phost;
+    $cmd .= " -proxy_user ${puser} -proxy_pass pass:${ppass}" if (($puser && $ppass) && $ossl_version =~ /^\w+ 3/); # proxy user/pass only 3+ FIXME: proper version check
     $cmd .= ' -ssl3' if $args{'sslv3'};
     $cmd .= ' -tls1' if $args{'tlsv1_0'};
     $cmd .= ' -tls1_1' if $args{'tlsv1_1'};
@@ -2997,9 +3002,47 @@ sub connect_ssl_tunnel {
     say STDERR "* connected via OpenSSL to $host:$port" if $args{verbose} || $args{debug};
     say STDERR "* command = $cmd" if $args{debug};
 
+    # if ($phost){
+    #     my @h;
+    #     push @h, "CONNECT $phost:$pport HTTP/1.0";
+    #     if ($puser){
+    #         push @h, "Proxy-Authorization: Basic " . encode_base64("$puser:$ppass", '');
+    #     }
+    #     send_http_request(*CMD_IN, *CMD_OUT, *CMD_ERR, $pheaders, undef);
+    #     my $presp = process_http_response_headers(IN  => $IN,
+    #                                                   ERR => $ERR,
+    #                                                   url => $url_proxy);
+    # }
+    
     $SIG{CHLD} = sub {
         print STDERR "* REAPER: status $? on ${tunnel_pid}\n" if waitpid($tunnel_pid, 0) > 0 && $args{debug};
     };
+
+    my $select = IO::Select->new(*CMD_OUT, *CMD_ERR);
+            
+    # process connection issues
+    # while(defined (my $line = <CMD_ERR>)){
+    while(my @ready = $select->can_read(5)){
+        foreach my $handle (@ready){
+            if (sysread($handle, my $buf, 4096)){
+                if (fileno($handle) == fileno(*CMD_OUT)){
+                } else {
+                    if ($args{debug} && $buf){
+                        say STDERR for hexdump($buf);
+                    }
+                    if ($buf =~ /407 Proxy Authentication Required/){
+                        say STDERR "Your proxy needs authentication, but your OpenSSL version does not support it ($ossl_version)";
+                        exit 15;
+                    }
+                }
+            }
+        }
+    }
+    if ($select->count){
+        # print "timeout";
+        # kill('TERM', $tunnel_pid);
+    }
+    
     return *CMD_IN, *CMD_OUT, *CMD_ERR;
 }
 
