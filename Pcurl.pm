@@ -385,14 +385,14 @@ if ($args{'get-curl-command'}){
         push @cli, "--user-agent '$a'";
     }
     
-    if (my $c = delete $args{content}){
-        push @cli, "-H 'Content-Type: $c'";
-    }
-    
     if (my $i = delete $args{'include-response'}){
         push @cli, "--include";
     }
     
+    if (my $c = delete $args{content}){
+        push @cli, "-H 'Content-Type: $c'";
+    }
+   
     my $d; # holder of a command-line argument or set of argiments (eg. dataxx are arrays)
     my $v; # one parameter value
     if ($d = delete $args{data}){
