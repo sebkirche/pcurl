@@ -528,14 +528,17 @@ sub process_loop {
                                      discovered => ($level ||
                                                     (defined $args{level} && $args{level} == 0)) ? \@discovered_at_this_level : undef
                     );
-                # response might be undef after timeout
-                $failed_url{$req} = $r->{status}{code} if defined $r->{status} && $r->{status}{code} >= 400 && $r->{status}{code} <= 599;
-                    
-                say STDERR sprintf("%s -> %d / %s",
-                                   $url->{url},
-                                   $r->{status}{code},
-                                   humanize_bytes($r->{body_byte_len})
-                    ) if $r->{body_byte_len} && ($args{progression} || $args{verbose} || $args{debug});
+                # response might be undef after a timeout: handle that case
+                # explicitly instead of relying on autovivification of $r.
+                if (defined $r){
+                    $failed_url{$req} = $r->{status}{code} if defined $r->{status} && $r->{status}{code} >= 400 && $r->{status}{code} <= 599;
+
+                    say STDERR sprintf("%s -> %d / %s",
+                                       $url->{url},
+                                       $r->{status}{code},
+                                       humanize_bytes($r->{body_byte_len})
+                        ) if $r->{body_byte_len} && ($args{progression} || $args{verbose} || $args{debug});
+                }
             }
             $processed_request{$req}++;
             
@@ -560,7 +563,7 @@ sub process_loop {
     }
     # if we need to process a next level of links in recursive crawler mode
     # call us recursively TODO: maybe we could just push in $request_list and return to loop
-    #                                               instead of recurse using a doouble while
+    #                                               instead of recurse using a double while
     # FIXME: $process_action has been changed by side-effect of process_http()
     if (($args{recursive} || $process_action && index($process_action->{what}, 'getlinked')==0)
         && @discovered_at_this_level
@@ -820,7 +823,10 @@ sub process_http {
             say STDERR "* received $resp->{head_byte_len} headers bytes" if $args{verbose} || $args{debug};
             say STDERR Dumper $resp if $args{debug};
             if ($resp->{head_byte_len}){
-                my $code = $resp->{status}{code};
+                # default to 0 when the status line could not be parsed, to avoid
+                # 'uninitialized value' warnings; 0 is falsy like undef so the
+                # guarded redirect comparisons below behave identically.
+                my $code = $resp->{status}{code} // 0;
                 say STDERR '* ' . $url_final->{url} . ' -> ' . $code if $args{verbose} || $args{debug};
                 say STDERR Dumper $resp->{headers} if $args{debug};
                
@@ -4034,7 +4040,7 @@ Set the delimiter for action results. Default is ','.
 
 =item --basic, --user <user:password>
 
-Use basic http authentication. Sepcified in the form user:password it is passed to the server in Base64 encoding.
+Use basic http authentication. Specified in the form user:password it is passed to the server in Base64 encoding.
 
 =item --content <content-type>
 
