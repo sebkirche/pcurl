@@ -1683,10 +1683,11 @@ sub get_matching_cookies {
     my @matching;
     for my $cookie (@$cookies){
         next if $cookie->{secure} && !($url->{scheme} eq 'https'); # secure cookies are only for https
-        my $dom_rx = $cookie->{domain};
-        $dom_rx =~ s/\./\\./g;
+        # quotemeta() escapes all regex metacharacters to prevent regex injection
+        # from malicious cookie domain/path values set by a server
+        my $dom_rx = quotemeta($cookie->{domain});
         $dom_rx = "\\b${dom_rx}\$";
-        my $path_rx = '^' . $cookie->{path} . '\b';
+        my $path_rx = '^' . quotemeta($cookie->{path}) . '\b';
         if ((($cookie->{domain} eq '*') || ($udomain =~ /$dom_rx/)) && ($upath =~ /$path_rx/)){
             push @matching, $cookie;
         }
