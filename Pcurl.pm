@@ -178,6 +178,7 @@ my @getopt_defs = (
     'json-stringify-null',
     'junk-session-cookies',
     'location|follow|L',
+    'location-trusted',
     'man',
     'max-wait=i',
     'max-redirs=i',
@@ -649,6 +650,11 @@ sub process_http {
     
     my ($IN, $OUT, $ERR, $host, $port, $resp, $following, $error_code);
 
+    # Remember the host that the --basic/--user credentials were intended for.
+    # curl strips the Authorization header when a redirect changes the host
+    # (unless --location-trusted is given); we replicate that behavior.
+    my $auth_host = $url_final->{host};
+
     $max_redirs = $args{'max-redirs'} if defined $args{'max-redirs'};
     my $redirs = $max_redirs;   # redirs is a countdown of remaining allowed redirections
 
@@ -767,6 +773,15 @@ sub process_http {
             ($OUT, $IN, $ERR) = connect_direct_socket($url_final->{host},
                                                       $url_final->{port}) if $url_final->{scheme} eq 'http';
             ($OUT, $IN, $ERR) = connect_ssl_tunnel($url_final) if $url_final->{scheme} eq 'https';
+        }
+
+        # Decide whether the global --basic credentials may be sent to the
+        # current host. curl drops them when the host changes on a redirect,
+        # unless --location-trusted is set.
+        $url_final->{trust_basic_auth} =
+            ($url_final->{host} eq $auth_host) || $args{'location-trusted'} ? 1 : 0;
+        if ($args{basic} && !$url_final->{trust_basic_auth}){
+            say STDERR "* Not sending Authorization header to $url_final->{host} (host changed on redirect; use --location-trusted to override)" if $args{verbose} || $args{debug};
         }
 
         my $body = prepare_http_body_to_post();
@@ -1187,7 +1202,11 @@ sub build_http_request_headers {
         add_http_header($headers, \%custom, 'User-Agent', $args{'user-agent'});
         add_http_header($headers, \%custom, 'Accept', '*/*');
         add_http_header($headers, \%custom, 'Connection', 'close');
-        my $auth = $args{basic} || ($u->{auth} ? $u->{auth}->{user} . ':' . $u->{auth}->{password} : undef);
+        # Global --basic credentials are only sent when trusted for this host
+        # (same host as original request, or --location-trusted). URL userinfo
+        # credentials belong to the current URL and always follow it.
+        my $basic_auth = ($u->{trust_basic_auth} // 1) ? $args{basic} : undef;
+        my $auth = $basic_auth || ($u->{auth} ? $u->{auth}->{user} . ':' . $u->{auth}->{password} : undef);
         add_http_header($headers, \%custom, 'Authorization', 'Basic ' . encode_base64($auth, '')) if $auth;
         # if ($u->{tunneled}){
             # my $auth = $args{'proxy-user'} || ($p->{auth} ? $p->{auth}{user} . ':' . $p->{auth}{password} : undef);
@@ -4065,7 +4084,11 @@ When using -b, --cookie and loading cookies from file, purge the session cookies
 
 =item -L, --location, --follow
 
-Follow HTTP redirects.
+Follow HTTP redirects. When a redirect changes the host, the Authorization header derived from --basic / --user is not resent to the new host, matching curl's default behavior. See --location-trusted to override.
+
+=item --location-trusted
+
+Like --location, but allows sending the --basic / --user credentials (Authorization header) to all hosts a redirect leads to, even when the host changes. Use with care, as this may leak your credentials to other hosts.
 
 =item --man
 
