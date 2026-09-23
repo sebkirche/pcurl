@@ -144,6 +144,10 @@ __PACKAGE__->cli( @ARGV ) if !caller() || caller() eq 'PAR'; # handles package c
 
 sub cli {
 
+# Clear any accumulator/session state left over from a previous invocation
+# when pcurl is used as a loadable module and cli() is called more than once.
+reset_state();
+
 my @getopt_defs = (
     'accept=s',
     'action=s',
@@ -457,6 +461,52 @@ sub simulate_cli_settings {
     my %params = @_;
 
     %args = (%args, %params);
+}
+
+# Reset the package-level accumulator/session state to its defaults.
+#
+# pcurl keeps its state in file-lexical globals (see top of file). That is fine
+# for a one-shot CLI process, but when pcurl is loaded as a module and invoked
+# more than once in the same process, state from a previous run would leak into
+# the next (e.g. already-visited URLs, cookies, counters). cli() calls this at
+# startup; programmatic callers should call it between independent runs.
+#
+# Note: this is a lightweight mitigation, not a full re-entrancy refactor.
+# By default %args is left untouched (cli() populates it via GetOptions and
+# programmatic callers set it via simulate_cli_settings). Pass a true value to
+# also clear %args back to its built-in defaults.
+sub reset_state {
+    my ($reset_args) = @_;
+
+    %processed_request    = ();
+    %rel_url_to_local_dir = ();
+    %broken_url           = ();
+    %failed_url           = ();
+    %discovered_url       = ();
+    $asset_counter        = 0;
+
+    $http_vers      = '1.1';    # default HTTP version
+    $tunnel_pid     = undef;
+    $auto_ref       = undef;
+    $use_cookies    = undef;
+    $cookies        = undef;
+    $process_action = undef;
+
+    @output_stack = ( *STDOUT );
+
+    if ($reset_args){
+        %args = ( 'tcp-nodelay'      => 1,
+                  'data'             => [],
+                  'data-binary'      => [],
+                  'data-raw'         => [],
+                  'data-urlencode'   => [],
+                  header             => [],
+                  'json-pp-indent'   => 2,
+                  'user-agent'       => "pCurl/$VERSION",
+                  'xml-pp-indent'    => 2,
+                  'xml-root-element' => 'root'
+            );
+    }
 }
 
 sub process_loop {

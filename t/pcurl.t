@@ -349,6 +349,35 @@ subtest 'hexdump - produces offset + hex + ascii' => sub {
 };
 
 # ---------------------------------------------------------------------------
+subtest 'reset_state - clears session accumulators between runs' => sub {
+    # Seed some args and run something that populates accumulator state.
+    Pcurl::simulate_cli_settings( 'header' => [], 'user-agent' => 'pCurl-test' );
+
+    # A broken URL populates %broken_url via process_loop (no network needed
+    # because validate_uri fails first and recursive mode continues).
+    Pcurl::simulate_cli_settings( 'recursive' => 1 );
+    Pcurl::process_loop([ 'this is not a uri' ], 0);
+    # After a run there should be some recorded state; reset must clear it.
+
+    Pcurl::reset_state();
+
+    # reset_state does not clear %args by default, so user-agent survives.
+    my $u = { scheme=>'http', host=>'example.com', port=>80, path=>'/' };
+    my $h = Pcurl::build_http_request_headers('GET', $u, undef, undef);
+    ok((grep { /^User-Agent: pCurl-test$/ } @$h),
+       'reset_state() preserves %args by default');
+
+    # reset_state(1) restores %args defaults (user-agent back to pCurl/<version>)
+    Pcurl::reset_state(1);
+    my $h2 = Pcurl::build_http_request_headers('GET', $u, undef, undef);
+    ok((grep { m{^User-Agent: pCurl/} } @$h2),
+       'reset_state(1) restores default %args');
+
+    # restore test defaults for subsequent subtests, clearing the recursive flag
+    Pcurl::simulate_cli_settings( 'header' => [], 'user-agent' => 'pCurl-test', 'recursive' => 0 );
+};
+
+# ---------------------------------------------------------------------------
 subtest 'path_escapes_base - traversal detection (security)' => sub {
     # safe paths stay within the base
     ok(!Pcurl::path_escapes_base('a/b/c'),           'plain relative path is safe');
