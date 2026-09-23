@@ -36,6 +36,17 @@ use Time::Local;
 our $VERSION = '0.9.10';
 $|++; # auto flush messages
 
+# -------- Tunable constants -----------------------
+my $IO_BUFFER_SIZE       = 1024 * 1024;     # buffer size for file/socket reads (1 MiB)
+my $HTTP_BODY_READ_SIZE  = 2 * 1024 * 1024; # read size for non-chunked HTTP response body (2 MiB)
+my $FILE_READ_CHUNK      = 1024;            # chunk size for file:// reads
+my $TUNNEL_ERR_READ_SIZE = 4096;            # read size for OpenSSL tunnel STDERR
+my $TUNNEL_PROBE_TIMEOUT = 5;               # seconds to probe the tunnel for connection issues
+my $STOMP_READ_TIMEOUT   = 1;               # seconds to wait for a STOMP SUBSCRIBE message
+my $STOMP_NEXT_TIMEOUT   = 0.1;             # short timeout for subsequent STOMP frame reads
+my $SIGINT_DOUBLE_DELAY  = 1;               # max seconds between two Ctrl-C to force exit
+# --------------------------------------------------
+
 # vars declared before signal handlers because we show a message using them
 my %args;
 my %processed_request;          # Requests done, for not doing again
@@ -58,7 +69,7 @@ sub tell_recursive {
 $SIG{INT}  = sub {
     state $last_time = 0;
     my $now = time;
-    if ($now - $last_time <= 1){ # Ctrl-C x2 within 1 second
+    if ($now - $last_time <= $SIGINT_DOUBLE_DELAY){ # Ctrl-C x2 within the delay
         say STDERR "SIGINT / CTRL-C received (Interrupt from keyboard). Leaving.";
         exit;
     }
@@ -1102,7 +1113,7 @@ sub process_file {
         binmode $fh;
         my $buf = '';
         while (1){
-            my $success = read($fh, $buf, 1024, length($buf));
+            my $success = read($fh, $buf, $FILE_READ_CHUNK, length($buf));
             die $! if not defined $success;
             last if not $success;
             print {current_output} $buf;
@@ -1365,7 +1376,7 @@ sub prepare_http_body_to_post{
                                 $part .= $l;
                             }
                         } else {
-                            my $buf_size = 1024 * 1024;
+                            my $buf_size = $IO_BUFFER_SIZE;
                             while(my $bytes = $fd->sysread($buf, $buf_size)){
                                 $part .= $buf;
                             }
@@ -1407,7 +1418,7 @@ sub prepare_http_body_to_post{
         die "Upload from STDIN is not yet supported" if $file eq '-';
         open my $fd, '<', $file or die "Can't open '$file'!";
         binmode($fd);
-        my $buf_size = 1024 * 1024;
+        my $buf_size = $IO_BUFFER_SIZE;
         while(my $bytes = $fd->sysread($buf, $buf_size)){
             $res .= $buf;
         }
@@ -1732,7 +1743,7 @@ NO_BIN
                         $chunk_len = hex($line); # block size is in hex ascii
                         say STDERR sprintf("* Next block is %d (0x%x) bytes long", $chunk_len, $chunk_len) if $args{debug}; 
                     }
-                    my $buf_size = $chunked_mode ? $chunk_len : (2 * 1024 * 1024);
+                    my $buf_size = $chunked_mode ? $chunk_len : $HTTP_BODY_READ_SIZE;
                     if ($buf_size){
                         my $bytes = $fh->read($buf, $buf_size);
                         if ($bytes){
@@ -2794,7 +2805,7 @@ sub process_stomp {
                                        # 'ack: client', auto | client / if client and no ACK frame, message will persist
                                        sprintf('ack:%s', $USE_ACK ? 'client' : 'auto')
                                    ]);
-                $resp = process_stomp_response($IN, 1);
+                $resp = process_stomp_response($IN, $STOMP_READ_TIMEOUT);
                 for my $frame (@$resp){
                     if (keys %$frame && $frame->{command} eq 'MESSAGE'){
                         say "Stomp headers:" . Dumper $frame if $args{debug};
@@ -2849,7 +2860,7 @@ sub process_stomp_response {
 
     my $resp = [];
     my $buf;                    # allocate the buffer once and not in loop - thanks Ikegami!
-    my $buf_size = 1024 * 1024;
+    my $buf_size = $IO_BUFFER_SIZE;
 
     my $selector = IO::Select->new();
     $selector->add($IN);
@@ -2887,7 +2898,7 @@ sub process_stomp_response {
                         if ($buf =~ s/^(.*?)\000\n*//s ){
                             $frame{body} = $1 unless $frame{body};
                             push @$resp, \%frame;
-                            $timeout = 0.1; # for next read short timeout
+                            $timeout = $STOMP_NEXT_TIMEOUT; # for next read short timeout
                             next FRAME;
                         } else {
                             die;
@@ -3185,9 +3196,9 @@ sub connect_ssl_tunnel {
             
     # process connection issues
     # while(defined (my $line = <CMD_ERR>)){
-    while(my @ready = $select->can_read(5)){
+    while(my @ready = $select->can_read($TUNNEL_PROBE_TIMEOUT)){
         foreach my $handle (@ready){
-            if (sysread($handle, my $buf, 4096)){
+            if (sysread($handle, my $buf, $TUNNEL_ERR_READ_SIZE)){
                 if (fileno($handle) == fileno(*CMD_OUT)){
                 } else {
                     if ($args{debug} && $buf){
