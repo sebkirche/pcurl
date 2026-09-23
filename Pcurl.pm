@@ -2985,22 +2985,26 @@ sub connect_ssl_tunnel {
     my $ossl_version = `openssl version`;
     chomp $ossl_version;
     
-    my $cmd = "openssl s_client -connect ${host}:${port} -servername ${host} -quiet";# -quiet -verify_quiet -partial_chain';
-    $cmd .= ' -4' if ($ossl_version =~ /^\w+ 3/); # use IPv4 only (unsupported by OpenSSL 1.02)
-    $cmd .= ' -no_check_time' if $args{insecure}; # useless?
-    $cmd .= " -proxy ${phost}:${pport}" if $phost;
-    $cmd .= " -proxy_user ${puser} -proxy_pass pass:${ppass}" if (($puser && $ppass) && $ossl_version =~ /^\w+ 3/); # proxy user/pass only 3+ FIXME: proper version check
-    $cmd .= ' -ssl3' if $args{'sslv3'};
-    $cmd .= ' -tls1' if $args{'tlsv1_0'};
-    $cmd .= ' -tls1_1' if $args{'tlsv1_1'};
-    $cmd .= ' -tls1_2' if $args{'tlsv1_2'};
-    $cmd .= ' -tls1_3' if $args{'tlsv1_3'};
-    $cmd .= " -CAfile $args{'ssl-ca'}" if $args{'ssl-ca'};
-    $cmd .= " -cert $args{'ssl-cert'}" if $args{'ssl-cert'};
-    $cmd .= " -key $args{'ssl-key'}" if $args{'ssl-key'};
-    $tunnel_pid = open3(*CMD_IN, *CMD_OUT, *CMD_ERR, $cmd);
+    # Build command as a list to prevent shell injection
+    # Using list form of open3() bypasses shell interpretation
+    my @cmd = ('openssl', 's_client', '-connect', "$host:$port", '-servername', $host, '-quiet');
+    push @cmd, '-4' if ($ossl_version =~ /^\w+ 3/); # use IPv4 only (unsupported by OpenSSL 1.02)
+    push @cmd, '-no_check_time' if $args{insecure}; # useless?
+    push @cmd, '-proxy', "$phost:$pport" if $phost;
+    push @cmd, '-proxy_user', $puser, '-proxy_pass', "pass:$ppass" if (($puser && $ppass) && $ossl_version =~ /^\w+ 3/); # proxy user/pass only 3+ FIXME: proper version check
+    push @cmd, '-ssl3' if $args{'sslv3'};
+    push @cmd, '-tls1' if $args{'tlsv1_0'};
+    push @cmd, '-tls1_1' if $args{'tlsv1_1'};
+    push @cmd, '-tls1_2' if $args{'tlsv1_2'};
+    push @cmd, '-tls1_3' if $args{'tlsv1_3'};
+    push @cmd, '-CAfile', $args{'ssl-ca'} if $args{'ssl-ca'};
+    push @cmd, '-cert', $args{'ssl-cert'} if $args{'ssl-cert'};
+    push @cmd, '-key', $args{'ssl-key'} if $args{'ssl-key'};
+    $tunnel_pid = open3(*CMD_IN, *CMD_OUT, *CMD_ERR, @cmd);
     say STDERR "* connected via OpenSSL to $host:$port" if $args{verbose} || $args{debug};
-    say STDERR "* command = $cmd" if $args{debug};
+    # Redact password in debug output for security
+    my @safe_cmd = map { /^pass:/ ? 'pass:***REDACTED***' : $_ } @cmd;
+    say STDERR "* command = " . join(' ', @safe_cmd) if $args{debug};
 
     # if ($phost){
     #     my @h;
