@@ -2261,7 +2261,9 @@ sub canonicalize {
     if ($path =~ m{^/}){
         undef $rel_to;
     }
-    my @st = split(m{/}, $rel_to // '');
+    # grep out empty segments so that a base like '/a/b' does not introduce a
+    # leading empty element (which would produce a doubled leading slash)
+    my @st = grep { length } split(m{/}, $rel_to // '');
     # $path =~ s{[^/]*$}{};       # remove trailing /
     for my $d (split(m{/}, $path)){
         next if $d eq '.';
@@ -2272,7 +2274,8 @@ sub canonicalize {
         }
     }
     my $r = '/' . join('/', @st);
-    $r .= '/' if $path =~ m{/$}; # put back final / if needed
+    # put back final / if needed, but never double the root slash
+    $r .= '/' if $path =~ m{/$} && @st;
     return $r;
 }
 
