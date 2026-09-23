@@ -182,6 +182,7 @@ my @getopt_defs = (
     'man',
     'max-wait=i',
     'max-redirs=i',
+    'no-auth-redact',
     'noproxy=s',
     'output|o=s',
     'octet-stream',
@@ -1046,13 +1047,25 @@ sub process_file {
     restore_output();
 }
 
+# Redact the credential part of sensitive header lines for verbose/debug
+# display. By default the base64 value of Authorization / Proxy-Authorization
+# headers is masked to avoid accidental credential leaks in logs or on screen.
+# Passing --no-auth-redact disables this and shows the raw value (as curl does).
+sub redact_header_line {
+    my $line = shift;
+    return $line if $args{'no-auth-redact'};
+    # mask the value after "Authorization: <scheme> " (e.g. Basic, Bearer)
+    $line =~ s/^((?:Proxy-)?Authorization:\s*\S+\s+).*/$1***REDACTED***/i;
+    return $line;
+}
+
 # transmission of headers + body to the server
 sub send_http_request {
     my ($IN, $OUT, $ERR, $headers, $body) = @_;
     
     push @$headers, '';         # empty line to terminate request
     if ($args{verbose} || $args{debug}){
-        print STDERR "> $_\n" for @$headers;
+        print STDERR '> ' . redact_header_line($_) . "\n" for @$headers;
     }
 
     my $headers_txt = join "", map { "$_\r\n" } @$headers;
@@ -3058,8 +3071,11 @@ sub connect_ssl_tunnel {
     push @cmd, '-key', $args{'ssl-key'} if $args{'ssl-key'};
     $tunnel_pid = open3(*CMD_IN, *CMD_OUT, *CMD_ERR, @cmd);
     say STDERR "* connected via OpenSSL to $host:$port" if $args{verbose} || $args{debug};
-    # Redact password in debug output for security
-    my @safe_cmd = map { /^pass:/ ? 'pass:***REDACTED***' : $_ } @cmd;
+    # Redact the proxy password in debug output for security, unless the user
+    # explicitly opts out with --no-auth-redact.
+    my @safe_cmd = $args{'no-auth-redact'}
+        ? @cmd
+        : map { /^pass:/ ? 'pass:***REDACTED***' : $_ } @cmd;
     say STDERR "* command = " . join(' ', @safe_cmd) if $args{debug};
 
     # if ($phost){
@@ -4104,6 +4120,10 @@ Specify the timeout in seconds when waiting for a response. Default is 10s.
 =item --max-redirs <number>
 
 Specify the maximum number of redirects to follow. Default is 50.
+
+=item --no-auth-redact
+
+By default, when showing the request in verbose (-v) or debug mode, pcurl masks the credential value of Authorization and Proxy-Authorization headers (and the proxy password in the OpenSSL command line) as '***REDACTED***' to avoid accidental credential leaks in logs or on screen. Note this differs from curl, which shows the raw value. Pass --no-auth-redact to disable the masking and display the raw values (useful for debugging authentication).
 
 =item --noproxy <domain_list>
 

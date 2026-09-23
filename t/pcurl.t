@@ -349,6 +349,31 @@ subtest 'hexdump - produces offset + hex + ascii' => sub {
 };
 
 # ---------------------------------------------------------------------------
+subtest 'redact_header_line - masks credentials by default (security)' => sub {
+    Pcurl::simulate_cli_settings( 'no-auth-redact' => 0 );
+    is(Pcurl::redact_header_line('Authorization: Basic YWxpY2U6c2VjcmV0'),
+       'Authorization: Basic ***REDACTED***',
+       'Basic auth value masked');
+    is(Pcurl::redact_header_line('Authorization: Bearer abc.def.ghi'),
+       'Authorization: Bearer ***REDACTED***',
+       'Bearer token masked');
+    is(Pcurl::redact_header_line('Proxy-Authorization: Basic Zm9vOmJhcg=='),
+       'Proxy-Authorization: Basic ***REDACTED***',
+       'Proxy-Authorization value masked');
+    is(Pcurl::redact_header_line('Host: example.com'),
+       'Host: example.com',
+       'non-sensitive header untouched');
+};
+
+subtest 'redact_header_line - --no-auth-redact shows raw value' => sub {
+    Pcurl::simulate_cli_settings( 'no-auth-redact' => 1 );
+    is(Pcurl::redact_header_line('Authorization: Basic YWxpY2U6c2VjcmV0'),
+       'Authorization: Basic YWxpY2U6c2VjcmV0',
+       'raw value shown when redaction disabled');
+    Pcurl::simulate_cli_settings( 'no-auth-redact' => 0 );
+};
+
+# ---------------------------------------------------------------------------
 subtest 'auth_string' => sub {
     my $u = { 'auth:user' => 'bob', 'auth:password' => 'pw' };
     is(Pcurl::auth_string($u), 'bob:pw@', 'user:password@ formatting');
