@@ -1153,6 +1153,12 @@ sub build_http_request_headers {
             #           on the right side of the colon, as in: -H "Host:".
             #           If you send the custom header with no-value then its header must be terminated with a semicolon,
             #           such as -H "X-Custom-Header;" to send "X-Custom-Header:".
+            # Reject headers containing CR or LF to prevent HTTP response
+            # splitting / header injection (e.g. -H 'X-Foo: bar\r\nX-Evil: 1')
+            if ($ch =~ /[\r\n]/){
+                say STDERR "* Header contains illegal CR/LF characters: header ignored";
+                next;
+            }
             if ($ch =~ /^([A-Za-z0-9-]+)([:;])\s*(.*)$/){
                 # undef will make header removal
                 if ($2 eq ':'){
@@ -1210,6 +1216,13 @@ sub build_http_request_headers {
 # - set to the default value if not in custom headers
 sub add_http_header {
     my ($headers, $custom, $name, $default) = @_;
+
+    # Reject values containing CR/LF to prevent header injection through
+    # user-controlled values such as --referer, --user-agent or --content
+    if (defined $default && $default =~ /[\r\n]/){
+        say STDERR "* Value for header '$name' contains illegal CR/LF characters: header ignored";
+        return;
+    }
 
     my $field = lc $name;
     if (! exists $custom->{$field} ){
