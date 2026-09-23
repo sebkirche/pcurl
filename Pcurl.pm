@@ -603,7 +603,7 @@ sub process_loop {
                      || lc($url->{host}) eq 'localhost'
                      || $url->{host} eq '127.0.0.1'){
                 say STDERR "* Invalid file://hostname/, expected localhost or 127.0.0.1 or none";
-                exit 4;
+                exit 17;
             }
             process_file($url, \@discovered_at_this_level);
         } else {
@@ -1208,7 +1208,7 @@ sub complete_url_default_values {
         $url->{port} = $defports{$url->{scheme}};
         if (!$url->{port} && $url->{scheme} ne 'file') {
             say STDERR "* Default port unknown for scheme '$url->{scheme}'...";
-            exit 1;
+            exit 15;
         }
     }
     if ($url->{scheme} eq 'file' && $url->{path} =~ m{^///}){
@@ -2010,11 +2010,11 @@ sub parse_process_action {
         } else {
             say STDERR "Unknown action $type";
             list_actions();
-            exit 10;
+            exit 16;
         }
     } else {
         list_actions();
-        exit 2;
+        exit 16;
     }
     say STDERR "Processed action:" . Dumper $action if $args{debug};
     return $action;
@@ -2076,7 +2076,7 @@ sub perform_action {
         push @$discovered_links, @refs;
     } else {
         say STDERR "I am afraid that I do not know what to do for '$action->{what}'";
-        exit 10;
+        exit 16;
     }
 }
 
@@ -3195,7 +3195,7 @@ sub connect_ssl_tunnel {
                     }
                     if ($buf =~ /407 Proxy Authentication Required/){
                         say STDERR "Your proxy needs authentication, but your OpenSSL version does not support it ($ossl_version)";
-                        exit 15;
+                        exit 18;
                     }
                 }
             }

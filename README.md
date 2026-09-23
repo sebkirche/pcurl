@@ -391,5 +391,9 @@ Return codes
 * 11 : http returned a temporary failure 4xx.
 * 12 : http returned a permanent failure 5xx.
 * 13 : STOMP issue.
-* 14 : unknown scheme
+* 14 : unknown scheme.
+* 15 : cannot determine the default port for the URL scheme.
+* 16 : invalid or unsupported --action specification.
+* 17 : invalid file:// host (expected localhost, 127.0.0.1, or none).
+* 18 : proxy authentication required but unsupported by the OpenSSL version.
 
