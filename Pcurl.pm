@@ -889,6 +889,15 @@ sub process_http {
                 || $args{'remote-name'}
                 || $args{recursive})){
             $out_file = urldecode($out_file);
+            # For server-derived names (--remote-name / recursive crawler), the
+            # path can contain '..' segments coming from the URL or a redirect.
+            # Refuse to write outside the intended download directory. An
+            # explicit --output name is the user's own choice and is exempt.
+            if (!$args{output} && path_escapes_base($out_file)){
+                say STDERR "* Refusing to write outside download directory: '$out_file' (path traversal)";
+                $failed_url{$url_final->{url}} = 'path-traversal';
+                goto BREAK;
+            }
             make_path($out_file);
             redirect_output_to_file($out_file);
         }
@@ -2958,6 +2967,28 @@ sub dump_url {
             say STDOUT "$k = $url->{$k}";
         }
     }
+}
+
+# Return true if the given (relative) output path would escape the base
+# directory once '.' and '..' segments are resolved lexically.
+# This guards crawler / --remote-name mode against path traversal from
+# server-controlled URLs or redirects (e.g. '../../../../etc/passwd').
+# The check is purely lexical because the target file does not exist yet.
+sub path_escapes_base {
+    my $path = shift;
+    # An absolute path always escapes the intended (relative) download tree.
+    return 1 if $path =~ m{^/};
+    my $depth = 0;
+    for my $seg (split m{/}, $path){
+        next if $seg eq '' || $seg eq '.';
+        if ($seg eq '..'){
+            $depth--;
+            return 1 if $depth < 0; # went above the base directory
+        } else {
+            $depth++;
+        }
+    }
+    return 0;
 }
 
 # make local directory tree

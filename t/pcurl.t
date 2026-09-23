@@ -349,6 +349,22 @@ subtest 'hexdump - produces offset + hex + ascii' => sub {
 };
 
 # ---------------------------------------------------------------------------
+subtest 'path_escapes_base - traversal detection (security)' => sub {
+    # safe paths stay within the base
+    ok(!Pcurl::path_escapes_base('a/b/c'),           'plain relative path is safe');
+    ok(!Pcurl::path_escapes_base('host/dir/file.html'), 'nested relative path is safe');
+    ok(!Pcurl::path_escapes_base('a/../b'),          'descend then back to base is safe');
+    ok(!Pcurl::path_escapes_base('./a/b'),           'leading dot is safe');
+
+    # traversal attempts are rejected
+    ok(Pcurl::path_escapes_base('../etc/passwd'),          'leading .. escapes');
+    ok(Pcurl::path_escapes_base('a/../../etc/passwd'),     'net upward traversal escapes');
+    ok(Pcurl::path_escapes_base('../../../../etc/cron.d/evil'), 'deep traversal escapes');
+    ok(Pcurl::path_escapes_base('/etc/passwd'),            'absolute path escapes');
+    ok(Pcurl::path_escapes_base('a/b/../../..'),           'trailing traversal below base escapes');
+};
+
+# ---------------------------------------------------------------------------
 subtest 'redact_header_line - masks credentials by default (security)' => sub {
     Pcurl::simulate_cli_settings( 'no-auth-redact' => 0 );
     is(Pcurl::redact_header_line('Authorization: Basic YWxpY2U6c2VjcmV0'),
