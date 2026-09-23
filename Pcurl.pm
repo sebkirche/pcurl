@@ -2271,11 +2271,31 @@ sub peek_val    { my @idx = @_; @idx=(-1) unless @idx; return @eval_stack[ @idx 
 sub pop_val     { return pop @eval_stack; }
 sub add_obj_val { my ($k,$v) = @_; $eval_stack[-1]->{$k} = $v; }
 sub add_arr_val { my $v = shift; push @{$eval_stack[-1]}, $v; }
+# Decode a JSON string literal (including surrounding double quotes) into its
+# Perl value. This avoids using eval() on untrusted input, which would allow
+# arbitrary code execution (e.g. backticks, embedded expressions).
 sub eval_json_string {
     my $s = shift;
-    $s =~ s/\\u([0-9A-Fa-f]{4})/\\x{$1}/g;
-    $s =~ s/([@\$*%])/\\$1/g;            # prevent interpolation of sigils
-    return eval $s;
+    # strip the surrounding double quotes
+    $s =~ s/\A"//;
+    $s =~ s/"\z//;
+    # decode escape sequences per RFC 8259
+    my %esc = (
+        '"'  => '"',
+        '\\' => '\\',
+        '/'  => '/',
+        'b'  => "\b",
+        'f'  => "\f",
+        'n'  => "\n",
+        'r'  => "\r",
+        't'  => "\t",
+    );
+    $s =~ s{
+        \\ (?: u([0-9A-Fa-f]{4}) | (["\\/bfnrt]) )
+    }{
+        defined $1 ? chr(hex($1)) : $esc{$2}
+    }gex;
+    return $s;
 }
 
 # Return a Perl structure corresponding to a json string
@@ -2408,7 +2428,7 @@ sub from_json {
           (?: \. \d+ )?
           (?: [eE] [-+]? \d+ )?
         )
-        (?{ my $v = eval $^N;
+        (?{ my $v = $^N + 0; # numeric coercion, no eval on untrusted input
             push_val($v);
             json_trace "->number $v"; 
         })
