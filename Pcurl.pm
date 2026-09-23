@@ -33,7 +33,7 @@ use Time::HiRes qw( sleep );
 use Time::Local;
 # use Carp::Always;
 
-our $VERSION = '0.9.10';
+our $VERSION = '0.9.11';
 $|++; # auto flush messages
 
 # -------- Tunable constants -----------------------
@@ -41,7 +41,7 @@ my $IO_BUFFER_SIZE       = 1024 * 1024;     # buffer size for file/socket reads 
 my $HTTP_BODY_READ_SIZE  = 2 * 1024 * 1024; # read size for non-chunked HTTP response body (2 MiB)
 my $FILE_READ_CHUNK      = 1024;            # chunk size for file:// reads
 my $TUNNEL_ERR_READ_SIZE = 4096;            # read size for OpenSSL tunnel STDERR
-my $TUNNEL_PROBE_TIMEOUT = 5;               # seconds to probe the tunnel for connection issues
+my $TUNNEL_PROBE_TIMEOUT = 0.5;             # seconds to probe a proxied tunnel for early errors (e.g. 407)
 my $STOMP_READ_TIMEOUT   = 1;               # seconds to wait for a STOMP SUBSCRIBE message
 my $STOMP_NEXT_TIMEOUT   = 0.1;             # short timeout for subsequent STOMP frame reads
 my $SIGINT_DOUBLE_DELAY  = 1;               # max seconds between two Ctrl-C to force exit
@@ -3192,31 +3192,35 @@ sub connect_ssl_tunnel {
         print STDERR "* REAPER: status $? on ${tunnel_pid}\n" if waitpid($tunnel_pid, 0) > 0 && $args{debug};
     };
 
-    my $select = IO::Select->new(*CMD_OUT, *CMD_ERR);
-            
-    # process connection issues
-    # while(defined (my $line = <CMD_ERR>)){
-    while(my @ready = $select->can_read($TUNNEL_PROBE_TIMEOUT)){
-        foreach my $handle (@ready){
-            if (sysread($handle, my $buf, $TUNNEL_ERR_READ_SIZE)){
-                if (fileno($handle) == fileno(*CMD_OUT)){
-                } else {
-                    if ($args{debug} && $buf){
-                        say STDERR for hexdump($buf);
-                    }
-                    if ($buf =~ /407 Proxy Authentication Required/){
-                        say STDERR "Your proxy needs authentication, but your OpenSSL version does not support it ($ossl_version)";
-                        exit 18;
+    # Probe the tunnel for early connection errors (e.g. a proxy returning
+    # "407 Proxy Authentication Required"). This is only relevant when going
+    # through a proxy: for a direct HTTPS connection there is nothing to detect
+    # here, and the loop below would otherwise block until can_read() times out
+    # on every request, adding a fixed multi-second delay for no benefit.
+    # Direct-connection tunnel errors are still caught later while reading the
+    # HTTP response headers (see the 's_client: HTTP CONNECT failed' handler).
+    if ($phost){
+        my $select = IO::Select->new(*CMD_OUT, *CMD_ERR);
+
+        # process connection issues
+        while(my @ready = $select->can_read($TUNNEL_PROBE_TIMEOUT)){
+            foreach my $handle (@ready){
+                if (sysread($handle, my $buf, $TUNNEL_ERR_READ_SIZE)){
+                    if (fileno($handle) == fileno(*CMD_OUT)){
+                    } else {
+                        if ($args{debug} && $buf){
+                            say STDERR for hexdump($buf);
+                        }
+                        if ($buf =~ /407 Proxy Authentication Required/){
+                            say STDERR "Your proxy needs authentication, but your OpenSSL version does not support it ($ossl_version)";
+                            exit 18;
+                        }
                     }
                 }
             }
         }
     }
-    if ($select->count){
-        # print "timeout";
-        # kill('TERM', $tunnel_pid);
-    }
-    
+
     return *CMD_IN, *CMD_OUT, *CMD_ERR;
 }
 
