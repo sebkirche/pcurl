@@ -502,11 +502,19 @@ subtest 'redact_header_line - --no-auth-redact shows raw value' => sub {
 
 # ---------------------------------------------------------------------------
 subtest 'auth_string' => sub {
-    my $u = { 'auth:user' => 'bob', 'auth:password' => 'pw' };
+    # uses the nested {auth}{user}/{password} shape produced by parse_uri
+    my $u = { auth => { user => 'bob', password => 'pw' } };
     is(Pcurl::auth_string($u), 'bob:pw@', 'user:password@ formatting');
+
+    my $user_only = { auth => { user => 'bob' } };
+    is(Pcurl::auth_string($user_only), 'bob@', 'user-only -> user@');
 
     my $n = { };
     is(Pcurl::auth_string($n), '', 'no auth -> empty string');
+
+    # regression: must read from a real parse_uri result, not flat keys
+    my $parsed = Pcurl::parse_uri('http://alice:secret@example.com/p');
+    is(Pcurl::auth_string($parsed), 'alice:secret@', 'works on a parse_uri() result (H1 regression)');
 };
 
 done_testing();

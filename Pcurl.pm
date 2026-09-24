@@ -2338,17 +2338,15 @@ sub to_absolute_url {
     
 }
 
+# Return the userinfo prefix for an authority, ready to splice before the host:
+# "user:password@" (or just "user@"), or the empty string when there is no
+# userinfo. parse_uri() stores userinfo as $url->{auth}{user}/{password}.
 sub auth_string {
     my $url = shift;
-    my $auth = '';
-    if ($url->{'auth:user'}){
-        $auth = $url->{'auth:user'};
-        if ($url->{'auth:password'}){
-            $auth .= ':' . $url->{'auth:password'};
-        }
-        $auth .= '@';
-    }
-    return $auth;
+    return '' unless $url->{auth} && defined $url->{auth}{user} && length $url->{auth}{user};
+    my $auth = $url->{auth}{user};
+    $auth .= ':' . $url->{auth}{password} if defined $url->{auth}{password};
+    return $auth . '@';
 }
     
 sub is_descendant_or_equal {
