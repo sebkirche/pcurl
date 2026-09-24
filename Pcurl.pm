@@ -2606,12 +2606,17 @@ sub to_json {
         $level--;
         $j .= (' ' x $indent x $level) if $args{'json-pp'};
         $j .= ']';
-    } elsif ($data =~ /^-?\d+(\.\d+)?([eE][+-]?\d+)?$/){
-        $j = eval $&; # $& = last successful match
-    } elsif ($data =~ /true/i){
-        $j = "true";
-    } elsif ($data =~ /false/i){
-        $j = "false";
+    } elsif ($data =~ /^-?(?:0|[1-9]\d*)(\.\d+)?([eE][+-]?\d+)?$/){
+        # emit as a bare JSON number only when the lexical form is already a
+        # valid JSON number (RFC 8259: no leading zeros). This avoids eval and
+        # avoids producing invalid JSON like 007. Values such as "007" fall
+        # through to the string branch and are correctly quoted.
+        $j = $data;
+    } elsif ($data eq 'true' || $data eq 'false'){
+        # only an exact 'true'/'false' is a JSON boolean literal; a string that
+        # merely contains those words must stay a quoted string (parsed booleans
+        # arrive here as 1/0 and are handled by the numeric branch above)
+        $j = $data;
     } else {
         # return a string while escaping some chars
         $data =~ s/([\\"])/\\$1/g; 

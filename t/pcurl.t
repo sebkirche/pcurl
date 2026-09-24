@@ -260,6 +260,31 @@ subtest 'JSON string escaping in to_json' => sub {
     is($back->{nl}, "a\nb",         'newline roundtrip');
 };
 
+subtest 'to_json - strings containing true/false stay quoted (regression A)' => sub {
+    # A substring "true"/"false" must NOT become a bare JSON literal.
+    is(Pcurl::to_json('construe'),        '"construe"',        'string containing "true" is quoted');
+    is(Pcurl::to_json('falsely'),         '"falsely"',         'string containing "false" is quoted');
+    is(Pcurl::to_json('untrue statement'),'"untrue statement"','embedded "true" is quoted');
+    # exact 'true'/'false' remain JSON boolean literals
+    is(Pcurl::to_json('true'),            'true',              'exact true is a literal');
+    is(Pcurl::to_json('false'),           'false',             'exact false is a literal');
+};
+
+subtest 'to_json - numeric-looking strings are not mangled by eval (regression B)' => sub {
+    # Valid JSON numbers are emitted bare.
+    is(Pcurl::to_json(42),        42,        'integer stays bare');
+    is(Pcurl::to_json(-7),        -7,        'negative integer stays bare');
+    is(Pcurl::to_json('0'),       '0',       'zero stays bare');
+    is(Pcurl::to_json('3.14'),    '3.14',    'float stays bare');
+    is(Pcurl::to_json('-1.5e3'),  '-1.5e3',  'exponent stays bare');
+    # Leading-zero forms are NOT valid JSON numbers: must be quoted, not eval'd to 7.
+    is(Pcurl::to_json('007'),     '"007"',   'leading-zero string is quoted, not renormalized');
+    is(Pcurl::to_json('0755'),    '"0755"',  'octal-looking string is quoted');
+    # The resulting document must be valid JSON (reparses).
+    my $doc = Pcurl::to_json({ zip => '007', n => 42 });
+    ok(defined Pcurl::from_json($doc), 'output with quoted 007 reparses as valid JSON');
+};
+
 # ---------------------------------------------------------------------------
 subtest 'get_jpath - navigation' => sub {
     my $data = Pcurl::from_json(
