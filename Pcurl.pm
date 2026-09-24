@@ -89,8 +89,12 @@ sub suspend_trap {
     $SIG{TSTP} = 'DEFAULT';
     kill 'TSTP', -(getpgrp $$);
 }
-$SIG{TSTP} = \&suspend_trap;
-$SIG{CONT} = sub { $SIG{TSTP} = \&suspend_trap; say STDERR "SIGCONT received - continue after suspension." };
+# TSTP/CONT are POSIX job-control signals; Windows has no such concept and
+# Perl there warns "No such signal" for each of these if installed.
+if ($^O ne 'MSWin32') {
+    $SIG{TSTP} = \&suspend_trap;
+    $SIG{CONT} = sub { $SIG{TSTP} = \&suspend_trap; say STDERR "SIGCONT received - continue after suspension." };
+}
 
 # the exit_hook is a hack to not terminate the program on exit() when it is called as package
 # because the code has been written initially as a program and can exit with a set of return codes
@@ -1529,8 +1533,20 @@ sub process_http_response_headers {
 
     say STDERR "* Processing response head" if $args{debug};
 
+    # On Windows, select()/IO::Select can only report readiness for real
+    # sockets, not for the pipes IPC::Open3 gives us to the OpenSSL tunnel
+    # process (connect_ssl_tunnel(), used for every https:// URL, proxied
+    # or not), so can_read() below would always return empty and this loop
+    # would never run for HTTPS. The $IN branch below already blocks on
+    # <$IN> until data/EOF and fully drains the headers by itself once
+    # entered, so on that platform+scheme we skip the readiness check and
+    # hand it $IN directly, once. Tunnel stderr is not interleaved live in
+    # this fallback (see connect_ssl_tunnel).
+    my $win_tunnel_once = ($^O eq 'MSWin32' && $url_final->{scheme} && $url_final->{scheme} eq 'https') ? 1 : 0;
+
     # reading loop on both server output and errors, with a timeout
-    while (my @ready = $selector->can_read($args{'max-wait'} || $def_max_wait)) {
+    while (my @ready = $win_tunnel_once ? ($win_tunnel_once-- && ($IN))
+                                         : $selector->can_read($args{'max-wait'} || $def_max_wait)) {
         foreach my $fh (@ready) {
             if ($ERR && (fileno($fh) == fileno($ERR))) {
                 my $line = <$fh>;
@@ -1677,9 +1693,17 @@ sub process_http_response_body {
     if ($response->{headers}{'transfer-encoding'} && $response->{headers}{'transfer-encoding'} eq 'chunked'){
         $chunked_mode = 1;
     }
-    
+
+    # See the matching comment in process_http_response_headers(): on
+    # Windows, select() cannot report readiness for the OpenSSL tunnel's
+    # pipes, so we hand $IN directly to the loop once instead of relying
+    # on can_read(), letting the existing blocking reads below drain the
+    # whole body as they already do once the $IN branch is entered.
+    my $win_tunnel_once = ($^O eq 'MSWin32' && $url_final->{scheme} && $url_final->{scheme} eq 'https') ? 1 : 0;
+
     # reading loop on both server output and errors, with a timeout
-    while (my @ready = $selector->can_read($args{'max-wait'} || $def_max_wait)) {
+    while (my @ready = $win_tunnel_once ? ($win_tunnel_once-- && ($IN))
+                                         : $selector->can_read($args{'max-wait'} || $def_max_wait)) {
         foreach my $fh (@ready) {
             if ($ERR && (fileno($fh) == fileno($ERR))) {
                 my $line = <$fh>;
@@ -3508,6 +3532,11 @@ sub connect_ssl_tunnel {
     # on every request, adding a fixed multi-second delay for no benefit.
     # Direct-connection tunnel errors are still caught later while reading the
     # HTTP response headers (see the 's_client: HTTP CONNECT failed' handler).
+    # On Windows, select() cannot report readiness on these pipes (see
+    # process_http_response_headers()), so can_read() below always returns
+    # empty and this probe is a harmless no-op there: a proxy auth failure
+    # still surfaces, just via the generic failure path instead of this
+    # fast early detection.
     if ($phost){
         my $select = IO::Select->new(*CMD_OUT, *CMD_ERR);
 
