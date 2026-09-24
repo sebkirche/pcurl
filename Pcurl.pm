@@ -606,6 +606,13 @@ sub process_loop {
                         if ($head && is_up_to_date($local, $head->{headers})){
                             say STDERR "* $url->{url} -> up to date, not retrieved ($local)"
                                 if $args{progression} || $args{verbose} || $args{debug};
+                            # Even though the page body is unchanged, still
+                            # discover the resources it references (a requisite
+                            # or child may be new or missing locally) by parsing
+                            # the local cached copy instead of re-downloading.
+                            my $discovered = ($level || (defined $args{level} && $args{level} == 0))
+                                             ? \@discovered_at_this_level : undef;
+                            discover_from_local($url, $local, $discovered);
                             $skipped_url{$ustr}++;
                             $processed_request{$ustr}++;
                             next REQUEST;
@@ -2194,6 +2201,27 @@ sub xml_action {
 sub getlinked_action {
     my ($action, $url, $resp) = @_;
     discover_links($resp, $url, $action->{value}, undef, ($action->{what} eq 'getlinked-tree'))
+}
+
+# When --timestamping skips an up-to-date page, we must still discover the
+# links it references (a requisite or child may be new/missing locally even
+# though the page itself is unchanged). Since the content is unchanged, parse
+# the *local* cached copy instead of re-downloading. Only meaningful for
+# discoverable text types (html/css/js); guarded by file extension since we
+# have no Content-Type header for a local file.
+sub discover_from_local {
+    my ($url, $local_path, $discovered) = @_;
+    return unless $discovered;                          # discovery not active
+    return unless defined $local_path && -f $local_path;
+    return unless $local_path =~ /\.(html?|xhtml|css|js)$/i
+               || $local_path =~ m{/$};                 # dir index (index.html)
+    open(my $fh, '<', $local_path) or return;
+    local $/;
+    my $content = <$fh>;
+    close $fh;
+    return unless defined $content && length $content;
+    my $resp = { captured => \$content };
+    push @$discovered, discover_links($resp, $url, $acceptrx, $rejectrx, !$args{'recursive-flat'});
 }
 
 sub discover_links {

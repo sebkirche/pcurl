@@ -531,6 +531,42 @@ subtest 'redact_header_line - --no-auth-redact shows raw value' => sub {
 };
 
 # ---------------------------------------------------------------------------
+subtest 'discover_from_local - timestamping skip still discovers links' => sub {
+    # Write a local cached page that references a requisite and a child link.
+    my $dir = tempdir(CLEANUP => 1);
+    my $file = "$dir/page.html";
+    open my $fh, '>', $file or die "cannot write $file: $!";
+    print $fh '<img src="logo.png"><a href="sub/child.html">c</a>';
+    close $fh;
+
+    my $u = Pcurl::parse_uri('http://example.com/dir/page.html');
+    Pcurl::complete_url_default_values($u);
+
+    Pcurl::reset_state();
+    Pcurl::simulate_cli_settings('recursive'=>1, 'no-parent'=>0, 'span-hosts'=>0,
+                                 'relative'=>0, 'page-requisites'=>0, header=>[]);
+    my @discovered;
+    Pcurl::discover_from_local($u, $file, \@discovered);
+    my @sorted = sort @discovered;
+    is_deeply(\@sorted,
+              [ 'http://example.com/dir/logo.png', 'http://example.com/dir/sub/child.html' ],
+              'links discovered from the local cached copy');
+
+    # non-discoverable extension (e.g. an image) must not be parsed
+    my $img = "$dir/logo.png";
+    open my $ifh, '>', $img or die; print $ifh 'PNGDATA<a href="x">'; close $ifh;
+    my @none;
+    Pcurl::discover_from_local($u, $img, \@none);
+    is(scalar @none, 0, 'image file is not parsed for links');
+
+    # no discovery target (undef) => no-op
+    Pcurl::discover_from_local($u, $file, undef);
+    ok(1, 'undef discovered list is a safe no-op');
+
+    Pcurl::reset_state();
+    Pcurl::simulate_cli_settings(header=>[], 'user-agent'=>'pCurl-test');
+};
+
 subtest 'local_path_for - local file path derivation' => sub {
     my $mk = sub {
         my $u = Pcurl::parse_uri($_[0]);
