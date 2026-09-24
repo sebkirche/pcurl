@@ -1664,13 +1664,15 @@ sub process_http_response_body {
                 say STDERR "* processing STDIN" if $args{debug};
                                 
                 if ($response->{headers}{'content-type'}){
-                    # add UTF-8 BOM when encoding says so
-                    if ($response->{headers}{'content-type'} =~ /charset=utf-8/){
+                    # add UTF-8 BOM when encoding says so.
+                    # charset is case-insensitive and may have optional spaces
+                    # and quotes around '=' (RFC 7231), e.g. charset="UTF-8".
+                    if ($response->{headers}{'content-type'} =~ /charset\s*=\s*"?utf-8/i){
                         $utf8_bom = 1;
                     }
                     
                     # avoid unwanted binary output
-                    if ($response->{headers}{'content-type'} =~ /charset=binary/){
+                    if ($response->{headers}{'content-type'} =~ /charset\s*=\s*"?binary/i){
                         if (!$args{output}
                             && (!$args{'remote-name'} && !$args{'remote-header-name'})
                             && -t $out){
