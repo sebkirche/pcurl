@@ -9,7 +9,7 @@
 package Pcurl;
 
 use Exporter qw/import/;
-@EXPORT_OK = qw/hexdump parse_uri process_http/;
+our @EXPORT_OK = qw/hexdump parse_uri process_http/;
 
 use warnings;
 use strict;
