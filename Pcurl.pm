@@ -2528,6 +2528,16 @@ sub is_up_to_date {
 
     my @st = stat $path;
     my $local_mtime = $st[9];
+    my $local_size  = $st[7];
+    # A 0-byte local file is never trustworthy as "up to date": it is either
+    # a genuinely empty resource (vanishingly rare for what -N is used for)
+    # or, more commonly, the leftover of a previous failed/interrupted
+    # download (e.g. a connection error, or a platform-specific I/O bug)
+    # that still got its mtime stamped from Last-Modified via -R. Since the
+    # size check just below only runs when the server sends a Content-Length
+    # header, a server that omits it (e.g. chunked responses) would
+    # otherwise let such an empty file be considered fresh forever.
+    return 0 if $local_size == 0;             # empty local file -> fetch
     return 0 if $server_epoch > $local_mtime; # server newer -> fetch
 
     # timestamp says not-newer; size is a secondary corroborating check.
@@ -2535,7 +2545,6 @@ sub is_up_to_date {
     my $cl = $headers->{'content-length'};
     if (defined $cl && $cl =~ /^\s*(\d+)\s*$/){
         my $server_size = $1;
-        my $local_size  = $st[7];
         return 0 if $server_size != $local_size; # changed despite same mtime -> fetch
     }
     return 1;                                 # up to date -> skip
