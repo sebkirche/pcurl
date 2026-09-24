@@ -531,6 +531,96 @@ subtest 'redact_header_line - --no-auth-redact shows raw value' => sub {
 };
 
 # ---------------------------------------------------------------------------
+subtest 'local_path_for - local file path derivation' => sub {
+    my $mk = sub {
+        my $u = Pcurl::parse_uri($_[0]);
+        Pcurl::complete_url_default_values($u);
+        return $u;
+    };
+
+    # --output takes precedence
+    Pcurl::reset_state();
+    Pcurl::simulate_cli_settings('output'=>'out.bin', 'recursive'=>0, 'remote-name'=>0, header=>[]);
+    is(Pcurl::local_path_for($mk->('http://example.com/a/b.html')), 'out.bin',
+       '--output wins');
+
+    # remote-name style: filename from url path
+    Pcurl::reset_state();
+    Pcurl::simulate_cli_settings('output'=>undef, 'recursive'=>0, 'remote-name'=>1, header=>[]);
+    is(Pcurl::local_path_for($mk->('http://example.com/dir/file.txt')), 'file.txt',
+       'filename derived from url path');
+
+    # recursive with host directories
+    Pcurl::reset_state();
+    Pcurl::simulate_cli_settings('output'=>undef, 'recursive'=>1, 'no-host-directories'=>0, header=>[]);
+    is(Pcurl::local_path_for($mk->('http://example.com/dir/file.txt')),
+       'example.com/dir/file.txt',
+       'recursive keeps host dir + full path');
+
+    # recursive, no host directories
+    Pcurl::reset_state();
+    Pcurl::simulate_cli_settings('output'=>undef, 'recursive'=>1, 'no-host-directories'=>1, header=>[]);
+    is(Pcurl::local_path_for($mk->('http://example.com/dir/file.txt')),
+       'dir/file.txt',
+       '--no-host-directories drops the host dir');
+
+    Pcurl::reset_state();
+    Pcurl::simulate_cli_settings(header=>[], 'user-agent'=>'pCurl-test');
+};
+
+subtest 'is_up_to_date - timestamping freshness predicate' => sub {
+    # RFC 1123 date helper -> the format str2epoch understands
+    my @dow = qw(Sun Mon Tue Wed Thu Fri Sat);
+    my @mon = qw(Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec);
+    my $httpdate = sub {
+        my @t = gmtime($_[0]);
+        sprintf('%s, %02d %s %04d %02d:%02d:%02d GMT',
+                $dow[$t[6]], $t[3], $mon[$t[4]], $t[5]+1900, $t[2], $t[1], $t[0]);
+    };
+
+    my ($fh, $path) = tempfile(UNLINK => 1);
+    print $fh 'hello';           # 5 bytes
+    close $fh;
+    my $mtime = 1_000_000_000;   # fixed local mtime
+    utime($mtime, $mtime, $path);
+    my $local_size = (stat $path)[7];
+
+    # server not newer, size unknown -> up to date (skip)
+    ok( Pcurl::is_up_to_date($path, { 'last-modified' => $httpdate->($mtime) }),
+        'not-newer + no size => up to date');
+
+    # server not newer, size equal -> up to date
+    ok( Pcurl::is_up_to_date($path, { 'last-modified' => $httpdate->($mtime - 10),
+                                      'content-length' => $local_size }),
+        'older + matching size => up to date');
+
+    # server not newer, size differs -> must fetch
+    ok(!Pcurl::is_up_to_date($path, { 'last-modified' => $httpdate->($mtime),
+                                      'content-length' => $local_size + 1 }),
+        'same mtime but different size => fetch');
+
+    # server newer -> must fetch
+    ok(!Pcurl::is_up_to_date($path, { 'last-modified' => $httpdate->($mtime + 60) }),
+        'server newer => fetch');
+
+    # missing Last-Modified -> fetch (fail open)
+    ok(!Pcurl::is_up_to_date($path, { 'content-length' => $local_size }),
+        'missing Last-Modified => fetch');
+
+    # unparseable Last-Modified -> fetch
+    ok(!Pcurl::is_up_to_date($path, { 'last-modified' => 'not a date' }),
+        'unparseable Last-Modified => fetch');
+
+    # non-integer / multi-valued Content-Length is ignored (decide on mtime)
+    ok( Pcurl::is_up_to_date($path, { 'last-modified' => $httpdate->($mtime),
+                                      'content-length' => "$local_size, $local_size" }),
+        'duplicated content-length ignored => decide on timestamp (skip)');
+
+    # missing local file -> fetch
+    ok(!Pcurl::is_up_to_date('/no/such/file/here', { 'last-modified' => $httpdate->($mtime) }),
+        'missing local file => fetch');
+};
+
 subtest 'discover_links - --page-requisites exempts parent-dir requisites (M4)' => sub {
     # page in /dir/sub/; references parent-dir requisites (one relative, one as a
     # same-host absolute URL that gets rewritten) plus a plain parent <a> link.

@@ -34,7 +34,7 @@ use Time::HiRes qw( sleep );
 use Time::Local;
 # use Carp::Always;
 
-our $VERSION = '0.9.11';
+our $VERSION = '0.9.12';
 $|++; # auto flush messages
 
 # -------- Tunable constants -----------------------
@@ -136,6 +136,7 @@ my $rejectrx;
 my $prefix = '';
 my %broken_url;                 # URLs that are not valid
 my %failed_url;                 # URLs that resulted in failure
+my %skipped_url;                # URLs skipped as up-to-date (--timestamping)
 my %discovered_url;
 my $asset_counter = 0;
 
@@ -213,6 +214,7 @@ my @getopt_defs = (
     'remote-header-name|J',
     'remote-name|O',
     'remote-time|R',
+    'timestamping|N',
     'referer|e=s',
     'request|X=s',
     'silent|s',
@@ -272,6 +274,10 @@ if ($Getopt::Long::VERSION >= '2.39') { # Getopt::Long does not support alias wi
 GetOptions(\%args, @getopt_defs ) or pod2usage(-exitval => 2, -verbose => 0);
 pod2usage(-exitval => 0, -verbose => 1) if $args{help};
 pod2usage(-exitval => 0, -verbose => 2) if $args{man};
+
+# --timestamping (-N) implies --remote-time (-R): downloaded files must carry
+# the server mtime so a later -N run can compare against it correctly.
+$args{'remote-time'} = 1 if $args{timestamping};
 
 if ($args{action} && $args{action} eq 'help:'){
     parse_process_action($args{action}); # will exit
@@ -462,6 +468,8 @@ if ($args{summary}){
     say STDERR $_ for sort keys %broken_url;
     say STDERR sprintf("* %d Failed URLS (can be due to dumb url detection):", scalar keys %failed_url) if keys %failed_url;
     say STDERR "$_ -> $failed_url{$_}" for sort keys %failed_url;
+    say STDERR sprintf("* %d URLS up to date (skipped, --timestamping):", scalar keys %skipped_url) if keys %skipped_url;
+    say STDERR $_ for sort keys %skipped_url;
 }
 
 
@@ -495,6 +503,7 @@ sub reset_state {
     %rel_url_to_local_dir = ();
     %broken_url           = ();
     %failed_url           = ();
+    %skipped_url          = ();
     %discovered_url       = ();
     $asset_counter        = 0;
 
@@ -582,9 +591,31 @@ sub process_loop {
             #$url->{path} = '*' if $method eq 'OPTIONS';
             # say STDERR $url->{url} if $args{progression} || $args{verbose} || $args{debug};
             unless (exists $processed_request{$ustr}){
+                # --timestamping (-N): if a local copy exists and the server's
+                # Last-Modified/size say it is unchanged, skip the download.
+                # The HEAD paces the request (crawl_delay), so the following GET
+                # (if any) must not delay again -> no_delay => 1.
+                my $did_head_delay = 0;
+                if ($args{timestamping} && $method eq 'GET'
+                    && !$args{head} && !$args{action}){
+                    my $local = local_path_for($url);
+                    if (defined $local && $local ne '-' && -f $local){
+                        crawl_delay();          # wait once, before the HEAD
+                        $did_head_delay = 1;
+                        my $head = head_request($url);
+                        if ($head && is_up_to_date($local, $head->{headers})){
+                            say STDERR "* $url->{url} -> up to date, not retrieved ($local)"
+                                if $args{progression} || $args{verbose} || $args{debug};
+                            $skipped_url{$ustr}++;
+                            $processed_request{$ustr}++;
+                            next REQUEST;
+                        }
+                    }
+                }
                 # lazy downloader: do it only once (keyed on the canonical url)
                 my $r = process_http(method     => $method,
                                      url        => $url,
+                                     no_delay   => $did_head_delay,
                                      discovered => ($level ||
                                                     (defined $args{level} && $args{level} == 0)) ? \@discovered_at_this_level : undef
                     );
@@ -738,14 +769,9 @@ sub process_http {
   REDIRECT:
         # we can loop in case of 3xx redirect
     do {
-        if ($args{wait}){
-            my $delay = $args{wait};
-            if ($args{'random-wait'}){
-                my $f = sprintf("%.1f", (rand(1) + .5)); # factor is 0.5 .. 1.5
-                $delay *= $f;
-            }
-            sleep($delay);
-        }
+        # honor --wait/--random-wait, unless a preceding --timestamping HEAD
+        # already paced this URL (wait once per URL, before the HEAD)
+        crawl_delay() unless $params{no_delay};
         
         say STDERR "* Processing url $url_final->{url}" if $args{verbose} || $args{debug};
         $next_url = '';
@@ -1469,6 +1495,7 @@ sub process_http_response_headers {
     my $url_proxy    = $params{url_proxy};
     my $output_name  = $params{out_file};
     my $following    = $params{follow};
+    my $no_cookies   = $params{no_cookies}; # true for the --timestamping HEAD probe: do not mutate the shared jar
     my $headers_done = 0;       # flag to know if we are processing headers or body
     my $status_done = 0;        # flag to know if we have processed the status
     my $received = 0;           # counter for total bytes received
@@ -1532,7 +1559,7 @@ sub process_http_response_headers {
                           # this is a header
                           my $hname = lc $1;
                           my $hvalue = $2;
-                          if ($hname eq 'set-cookie'){
+                          if ($hname eq 'set-cookie' && !$no_cookies){
                               my @head_cookies = parse_cookie_header($hvalue, $url_final);
                               say STDERR "Cannot parse cookie header: $hvalue" unless @head_cookies;
                               HCOOKIE: for my $hcook (@head_cookies){
@@ -2371,6 +2398,148 @@ sub auth_string {
     return $auth . '@';
 }
     
+# Sleep for --wait seconds (optionally randomized by --random-wait). Extracted
+# so the delay is applied consistently by process_http and the --timestamping
+# pre-check (which paces the HEAD request).
+sub crawl_delay {
+    return unless $args{wait};
+    my $delay = $args{wait};
+    if ($args{'random-wait'}){
+        my $f = sprintf("%.1f", (rand(1) + .5)); # factor is 0.5 .. 1.5
+        $delay *= $f;
+    }
+    sleep($delay);
+}
+
+# Compute the local file path a download would write for the given parsed url,
+# mirroring the derivation in process_http (fname + cut-dirs + host dir +
+# prefix). Returns the path, or undef when no local file can be determined
+# (in which case --timestamping simply proceeds to fetch). Pure / no side
+# effects, so it is safe to call from the reentrancy-sensitive pre-check.
+sub local_path_for {
+    my $url = shift;
+    my $fname;
+
+    if ($args{output}){
+        $fname = $args{output};
+    } elsif ($rel_url_to_local_dir{$url->{url}}){
+        # crawler-discovered file
+        $fname = $rel_url_to_local_dir{$url->{url}};
+        $fname .= $index_name if $fname =~ m{/$};
+    } elsif ($url->{path} =~ m{.*/([^/]+)$}){
+        $fname = ($args{recursive} && !$args{'recursive-flat'}) ? urldecode($&) : urldecode($1);
+        $fname = substr($fname, 1) if $fname =~ m{^/}; # drop initial /
+    } elsif ($url->{path} =~ m{/$}){
+        $fname = $url->{path} . $index_name;
+        $fname = substr($fname, 1);
+    } else {
+        return undef;           # cannot determine a local name -> fetch
+    }
+
+    return undef unless defined $fname && length $fname;
+    return $fname if $fname eq '-'; # stdout sentinel (caller treats as no-file)
+
+    # process cut-dirs
+    if ($args{'cut-dirs'}){
+        my @path = split(m{/}, $fname);
+        my $f = pop @path;
+        if ($args{'recursive-flat'}){
+            @path = ();
+        } else {
+            for (my $i = 1; $i <= $args{'cut-dirs'}; $i++){ shift @path; }
+        }
+        $fname = @path ? join('/', @path) . "/$f" : $f;
+    }
+
+    my $h = '';
+    if ($args{recursive} && !$args{'no-host-directories'}){
+        $h = $url->{host};
+        $h .= ':' . $url->{port} if $url->{port} != $defports{$url->{scheme}};
+        $h .= '/';
+    }
+    return urldecode("${prefix}${h}${fname}");
+}
+
+# Pure freshness predicate for --timestamping. Given a local file path and the
+# HEAD response headers (last-modified + content-length), decide whether the
+# local copy is up to date (skip) or must be (re)fetched. See the decision
+# matrix in plan_timestamping.md.
+#   returns 1 = up to date (skip),  0 = must fetch
+sub is_up_to_date {
+    my ($path, $headers) = @_;
+    return 0 unless defined $path && $path ne '-' && -f $path; # no local file -> fetch
+
+    my $lm = $headers->{'last-modified'};
+    return 0 unless defined $lm;             # can't prove freshness -> fetch
+    my $server_epoch = str2epoch($lm);
+    return 0 if $server_epoch < 0;           # unparseable -> fetch
+
+    my @st = stat $path;
+    my $local_mtime = $st[9];
+    return 0 if $server_epoch > $local_mtime; # server newer -> fetch
+
+    # timestamp says not-newer; size is a secondary corroborating check.
+    # only use Content-Length when it is a single clean integer.
+    my $cl = $headers->{'content-length'};
+    if (defined $cl && $cl =~ /^\s*(\d+)\s*$/){
+        my $server_size = $1;
+        my $local_size  = $st[7];
+        return 0 if $server_size != $local_size; # changed despite same mtime -> fetch
+    }
+    return 1;                                 # up to date -> skip
+}
+
+# Side-effect-free HEAD probe used by --timestamping. Opens a connection, sends
+# a HEAD, reads only the response headers, and returns the parsed header hash
+# (or undef on failure). Deliberately avoids the stateful process_http path:
+# it does not touch $process_action, the discovery list, %processed_request /
+# %failed_url, and does not merge Set-Cookie into the shared jar (cookies are
+# read-only here). See the reentrancy analysis in plan_timestamping.md.
+sub head_request {
+    my $url = shift;
+    my ($IN, $OUT, $ERR);
+
+    my $url_proxy = get_proxy_settings($url);
+    my $pheaders = [];
+    if ($url_proxy){
+        $pheaders = build_http_proxy_headers($url_proxy, $url);
+        $url->{proxified} = 1 if $url->{scheme} eq 'http';  # direct via proxy
+        $url->{tunneled}  = 1 if $url->{scheme} eq 'https'; # openSSL tunnel
+        ($OUT, $IN, $ERR) = connect_direct_socket($url_proxy->{host}, $url_proxy->{port}) if $url->{scheme} eq 'http';
+        ($OUT, $IN, $ERR) = connect_ssl_tunnel($url, $url_proxy) if $url->{scheme} eq 'https';
+    } else {
+        ($OUT, $IN, $ERR) = connect_direct_socket($url->{host}, $url->{port}) if $url->{scheme} eq 'http';
+        ($OUT, $IN, $ERR) = connect_ssl_tunnel($url) if $url->{scheme} eq 'https';
+    }
+    return undef unless $IN;
+
+    # proxy preamble (CONNECT / Proxy-Authorization), same as process_http
+    if (@$pheaders){
+        send_http_request($IN, $OUT, $ERR, $pheaders, undef);
+        my $presp = process_http_response_headers(IN => $IN, ERR => $ERR,
+                                                  url => $url_proxy, no_cookies => 1);
+        unless ($presp && $presp->{status}{code} && $presp->{status}{code} == 200){
+            # proxy refused/failed -> can't establish freshness, fail open
+            close $IN;  close $OUT;  close $ERR if $ERR;
+            return undef;
+        }
+    }
+
+    my $headers = build_http_request_headers('HEAD', $url, $url_proxy, undef);
+    send_http_request($IN, $OUT, $ERR, $headers, undef);
+    my $resp = process_http_response_headers(IN  => $IN,
+                                             ERR => $ERR,
+                                             url => $url,
+                                             url_proxy => $url_proxy,
+                                             no_cookies => 1);
+    close $IN  if $IN;
+    close $OUT if $OUT;
+    close $ERR if $ERR;
+
+    return undef unless $resp && $resp->{head_byte_len};
+    return $resp;
+}
+
 # Derive the "current directory" boundary used by --no-parent from a page path.
 #
 # The tricky case is a page path with no trailing slash: is the last segment a
@@ -4402,6 +4571,10 @@ Write output to a file named as the remote file (that name is extracted from the
 =item -R, --remote-time
 
 Set the remote file's time on the local output, if provided by Last-Modified response header.
+
+=item -N, --timestamping
+
+Do not re-download a file that is already present locally and unchanged on the server. For each URL that maps to a local file, pcurl issues a HEAD request and compares the server's Last-Modified (and, when available as a plain integer, Content-Length) against the local file's modification time and size; if the server copy is not newer and the size matches (or is unknown), the download is skipped. This works with output-to-file modes (--recursive, --remote-name, --output) and is a no-op for output to stdout. Freshness is only skipped when it can be positively established; anything ambiguous (no local file, missing/unparseable Last-Modified, server newer, differing size, HEAD unsupported) results in a normal download. When --wait/--random-wait is used, the delay is applied once, before the HEAD. Note: -N implies -R (--remote-time), so downloaded files carry the server timestamp and later -N runs compare correctly.
 
 =item -X, --request <method>
 

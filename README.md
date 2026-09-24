@@ -252,6 +252,22 @@ Options
         Set the remote file's time on the local output, if provided by
         Last-Modified response header.
 
+    -N, --timestamping
+        Do not re-download a file that is already present locally and
+        unchanged on the server. For each URL that maps to a local file,
+        pcurl issues a HEAD request and compares the server's Last-Modified
+        (and, when available as a plain integer, Content-Length) against the
+        local file's modification time and size; if the server copy is not
+        newer and the size matches (or is unknown), the download is skipped.
+        Works with output-to-file modes (--recursive, --remote-name,
+        --output); no-op for stdout. Freshness is only skipped when it can be
+        positively established (missing local file, missing/unparseable
+        Last-Modified, server newer, differing size, or HEAD unsupported all
+        result in a normal download). With --wait/--random-wait the delay is
+        applied once, before the HEAD. Note: -N implies -R (--remote-time) so
+        downloaded files carry the server timestamp and later -N runs compare
+        correctly.
+
     -X, --request <method>
         Specify the method for the request. Common methods are GET, HEAD,
         POST, PUT, TRACE, OPTIONS and DELETE, but you can specify a custom
