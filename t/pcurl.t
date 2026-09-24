@@ -109,15 +109,53 @@ subtest 'complete_url_default_values - default ports' => sub {
 };
 
 # ---------------------------------------------------------------------------
-subtest 'urlencode / urldecode roundtrip' => sub {
-    is(Pcurl::urlencode('a b'),       'a+b',          'space -> +');
-    is(Pcurl::urlencode('a/b?c=d'),   'a%2Fb%3Fc%3Dd','reserved chars encoded');
-    is(Pcurl::urldecode('a+b'),       'a b',          '+ -> space');
-    is(Pcurl::urldecode('a%2Fb'),     'a/b',          '%2F -> /');
+subtest 'form_urlencode / form_urldecode roundtrip' => sub {
+    is(Pcurl::form_urlencode('a b'),       'a+b',          'space -> +');
+    is(Pcurl::form_urlencode('a/b?c=d'),   'a%2Fb%3Fc%3Dd','reserved chars encoded');
+    is(Pcurl::form_urldecode('a+b'),       'a b',          '+ -> space');
+    is(Pcurl::form_urldecode('a%2Fb'),     'a/b',          '%2F -> /');
 
     for my $s ('hello world', 'x=1&y=2', 'path/seg') {
+        is(Pcurl::form_urldecode(Pcurl::form_urlencode($s)), $s, "roundtrip: '$s'");
+    }
+};
+
+subtest 'urlencode - RFC 3986 path-safe percent-encoding' => sub {
+    # Unlike form_urlencode(), this must preserve URL structure: reserved
+    # delimiters and sub-delims pass through unencoded, space becomes %20
+    # (not '+'), and a byte string with a multi-byte UTF-8 character (e.g.
+    # 'é', bytes C3 A9) must yield a correct multi-%XX sequence, not a
+    # mojibake'd re-encoding. Regression guard for the "400 Bad Request on
+    # an accented filename" bug (discover_links() sending a raw non-ASCII
+    # byte unencoded in the request-line).
+    is(Pcurl::urlencode('a b'),          'a%20b',            'space -> %20, not +');
+    is(Pcurl::urlencode('a/b?c=d&e=f'),  'a/b?c=d&e=f',      'path/query structure preserved');
+    is(Pcurl::urlencode('http://h/p'),   'http://h/p',       'scheme/authority delimiters preserved');
+    is(Pcurl::urlencode("caf\xC3\xA9"),  'caf%C3%A9',        'UTF-8 bytes for é -> %C3%A9, one %XX per byte');
+    is(Pcurl::urlencode('100%'),         '100%25',           'a lone unescaped % is itself escaped');
+    is(Pcurl::urlencode('a%20b'),        'a%20b',            'an already-percent-encoded triplet is left alone');
+    is(Pcurl::urlencode("4 - La Mal\xC3\xA9diction.pdf"), '4%20-%20La%20Mal%C3%A9diction.pdf',
+       'real-world case: accented pdf filename in an href');
+    # A literal '+' is a valid, unreserved-enough URL/path character and
+    # must be left alone (not confused with form_urlencode()'s '+' == space).
+    is(Pcurl::urlencode('a+b c.pdf'),    'a+b%20c.pdf',      'literal + is preserved, only space is escaped');
+
+    for my $s ('hello world', 'path/seg?x=1&y=2', "caf\xC3\xA9/file.pdf", 'a+b c.pdf', 'C++.pdf') {
         is(Pcurl::urldecode(Pcurl::urlencode($s)), $s, "roundtrip: '$s'");
     }
+};
+
+subtest 'urldecode vs form_urldecode - "+" handling must not be conflated' => sub {
+    # Regression guard for the bug found in review: urldecode() must be the
+    # correct inverse of urlencode() (leaves a literal '+' as '+'), while
+    # form_urldecode() must be the correct inverse of form_urlencode()
+    # (treats '+' as an encoded space). Conflating the two silently
+    # corrupts any urlencode()'d path/filename containing a literal '+'.
+    is(Pcurl::urldecode('a+b'),      'a+b', "urldecode() leaves a literal '+' alone");
+    is(Pcurl::form_urldecode('a+b'), 'a b', "form_urldecode() still treats '+' as space");
+    # both still agree on %XX decoding
+    is(Pcurl::urldecode('a%2Bb'),      'a+b', 'urldecode(): %2B decodes to a literal +');
+    is(Pcurl::form_urldecode('a%2Bb'), 'a+b', 'form_urldecode(): %2B also decodes to a literal +');
 };
 
 subtest 'urldecode - hex escapes with letters (regression: not just digits)' => sub {

@@ -34,6 +34,17 @@ use Time::HiRes qw( sleep );
 use Time::Local;
 # use Carp::Always;
 
+# Windows-only, bundled with Strawberry/ActiveState Perl (not an extra CPAN
+# install) -- used only to create files/directories with correctly-encoded
+# Unicode names on Windows. See the comments in redirect_output_to_file()
+# and make_path() for why the plain core open()/mkdir() are not enough
+# there. Loaded conditionally (and its symbols always called fully
+# qualified, e.g. Win32API::File::GENERIC_WRITE()) so macOS/Linux, which do
+# not ship these modules, do not need them, and never import them, still
+# compile this file cleanly under `use strict`.
+use if $^O eq 'MSWin32', 'Win32API::File';
+use if $^O eq 'MSWin32', 'Win32';
+
 our $VERSION = '0.9.12';
 $|++; # auto flush messages
 
@@ -707,7 +718,47 @@ sub redirect_output_to_file {
     if ($out_name && $out_name ne '-'){
         # open $STDOLD, '>&', STDOUT;
         my $new_fd = gensym();
-        open $new_fd, '>', $out_name or die "Cannot open '$out_name' for output.";
+        if ($^O eq 'MSWin32' && !ref($out_name)){
+            # Windows needs a different path here than macOS/Linux because
+            # the two kinds of filesystem disagree on what a filename *is*.
+            # macOS/Linux filesystems store a filename as an opaque byte
+            # string, which by convention is UTF-8 -- that's why urldecode()
+            # deliberately returns raw bytes (see its own comment): handing
+            # those bytes straight to open() is exactly right there. NTFS,
+            # on Windows, does not store bytes at all: it stores UTF-16
+            # (wide-character) names natively. Perl's core open()/mkdir() on
+            # Windows go through the legacy ANSI ("*A") Win32 API for a
+            # plain string, which maps each byte through the system code
+            # page (e.g. CP1252) instead of decoding it as UTF-8 -- so the
+            # 2-byte UTF-8 sequence for 'é' (C3 A9) is created on disk as
+            # the two separate characters 'Ã©'. This happens whether or not
+            # the string has Perl's internal utf8 flag set (verified): core
+            # Perl on Windows has no automatic Unicode-filename support (see
+            # perlrun's own "-C" section, which lists filename encoding as
+            # still an open TODO).
+            #
+            # The fix is to go around open() entirely and call the real
+            # Win32 wide-character API, CreateFileW, via Win32API::File
+            # (bundled with Strawberry/ActiveState, not an extra CPAN
+            # dependency). It is a thin binding to the actual C API, which
+            # expects a raw UTF-16LE byte buffer -- not a utf8-flagged Perl
+            # string, that was tried and confirmed *not* to work -- so the
+            # bytes are first decoded from UTF-8 to characters and then
+            # re-encoded to UTF-16LE before the call. OsFHandleOpen() then
+            # wraps the resulting native Win32 handle into an ordinary Perl
+            # filehandle, so every caller downstream (print/binmode/close)
+            # works exactly as it would with a normal open().
+            my $utf16_name = Encode::encode('UTF-16LE', Encode::decode('UTF-8', $out_name));
+            my $handle = Win32API::File::CreateFileW($utf16_name,
+                                                      Win32API::File::GENERIC_WRITE(), 0, [],
+                                                      Win32API::File::CREATE_ALWAYS(),
+                                                      Win32API::File::FILE_ATTRIBUTE_NORMAL(), []);
+            $handle or die "Cannot open '$out_name' for output: $^E";
+            Win32API::File::OsFHandleOpen($new_fd, $handle, 'w')
+                or die "Cannot open '$out_name' for output: $^E";
+        } else {
+            open $new_fd, '>', $out_name or die "Cannot open '$out_name' for output.";
+        }
         push @output_stack, $new_fd;
         # my $line = [caller(0)]->[2];
         # my $sub = [caller(1)]->[3];
@@ -1420,7 +1471,7 @@ sub prepare_http_body_to_post{
                                 if ($1){
                                     $part = $1 . '=' . $part;
                                 } else {
-                                    $part = urlencode($part);
+                                    $part = form_urlencode($part);
                                 }
                             }
                         }
@@ -1437,9 +1488,9 @@ sub prepare_http_body_to_post{
                             # data-urlencode
                             $data =~ /(\w*=)?(.*)/;
                             if ($1 && $1 ne '='){
-                                push @parts, "$1" . urlencode($2);
+                                push @parts, "$1" . form_urlencode($2);
                             } else {
-                                push @parts, urlencode($2);
+                                push @parts, form_urlencode($2);
                             }
                         }
                     }
@@ -2290,9 +2341,11 @@ sub discover_links {
         # remove fragment (avoid duplicates)
         $r =~ s/#.*$//;
 
-        # fix urls with spaces
-        $r =~ s/ /%20/g;
-        
+        # Percent-encode bytes that must not appear literally in a URL path
+        # (see urlencode()'s doc comment: a raw non-ASCII href is otherwise
+        # rejected outright by strict servers/CDNs, e.g. Cloudflare 400).
+        $r = urlencode($r);
+
         next RES unless $r;           # url without fragment is empty
         next RES if $dups{$r};        # avoid multiple downloads
         next RES if $r =~ /^mailto:/; # avoid mail links
@@ -3393,7 +3446,20 @@ sub make_path {
         for (my $i=0; $i<= $#dirs; $i++){
             my $dir_to_create = join '/', @dirs[ 0 .. $i ];
             unless (-d $dir_to_create){
-                mkdir $dir_to_create or die "Cannot create directory $dir_to_create: $!";
+                # Same UTF-8-bytes-vs-UTF-16-names mismatch as in
+                # redirect_output_to_file() (see its comment for the full
+                # explanation), for directories instead of files: core
+                # mkdir() on Windows mangles a non-ASCII byte-string name.
+                # Unlike CreateFileW, Win32::CreateDirectory conveniently
+                # accepts a decoded (utf8-flagged) Perl string directly and
+                # handles the wide-character conversion itself, so no manual
+                # UTF-16LE re-encoding is needed here.
+                if ($^O eq 'MSWin32'){
+                    Win32::CreateDirectory(Encode::decode('UTF-8', $dir_to_create))
+                        or die "Cannot create directory $dir_to_create: $^E";
+                } else {
+                    mkdir $dir_to_create or die "Cannot create directory $dir_to_create: $!";
+                }
             }
         }
     } # else a file?
@@ -3413,21 +3479,65 @@ sub str2epoch {
     return $e;
 }
     
-# perform a string encoding compatible with url
-sub urlencode {
+# Encode a string per the application/x-www-form-urlencoded convention
+# (space -> '+', everything else non-alphanumeric percent-encoded). This is
+# for POST body VALUES (--data-urlencode), not for encoding a URL/path: it
+# percent-encodes URL-structural characters too (e.g. '/', ':', '?', '&'),
+# so running a full URL through it would break its structure, and '+' only
+# means "space" inside a form body or query string, not in a path segment
+# (a literal '+' there stays a plus sign). For percent-encoding a URL path
+# while preserving its structure, see urlencode() below.
+sub form_urlencode {
     my $s = shift;
     $s =~ s/ /+/g;
     $s =~ s/([^A-Za-z0-9+])/sprintf("%%%02X", ord($1))/eg;
     return $s;
 }
 
-# decode an url-encoded string, returning a BYTE string
+# Percent-encode bytes that must not appear literally in an HTTP
+# request-line / URL path (RFC 7230 requires a valid request-target; RFC
+# 3986 restricts unencoded octets to ASCII unreserved/reserved chars).
+# Unlike form_urlencode() above, this preserves URL-structural characters
+# (":", "/", "?", "#", "[", "]", "@", and the sub-delims) and any
+# already-percent-encoded triplet (%XX), so it is safe to run a whole
+# URL/path through it without breaking its structure -- and a space becomes
+# "%20", not "+" (which only means "space" inside a form body/query string,
+# never in a path segment: a literal '+' there stays a plus sign).
+#
+# $s is expected to be a BYTE string (e.g. as captured from an HTTP
+# response body -- see binmode(':raw') in process_http_response_body()), so
+# ord($1) below operates on the original bytes one at a time, producing a
+# correct multi-%XX encoding for a multi-byte UTF-8 character (e.g. 'é',
+# bytes C3 A9, -> "%C3%A9") rather than re-encoding an already-mojibake'd
+# string.
+#
+# Used by discover_links() on every href/src pulled out of a page: a raw
+# link with an accented character sent unencoded in a GET request line is
+# rejected outright by strict servers/CDNs (observed: Cloudflare returns
+# 400 Bad Request for such a URL, so the resource is silently never
+# retrieved).
+sub urlencode {
+    my $s = shift;
+    $s =~ s/%(?![0-9A-Fa-f]{2})/%25/g;   # escape a lone/unescaped '%'
+    $s =~ s/([^A-Za-z0-9\-._~:\/?#\[\]@!\$&'()*+,;=%])/sprintf("%%%02X", ord($1))/eg;
+    return $s;
+}
+
+# Decode a urlencode()'d (RFC 3986 path-safe) string, returning a BYTE string.
 #
 # Handles:
-#   +          -> space
 #   %XX        -> the single byte with that hex value (RFC 3986 percent-encoding)
 #   %uXXXX     -> a Unicode code point (non-standard form emitted by some
 #                 legacy Microsoft stacks / escape()), encoded to UTF-8 bytes
+#
+# Does NOT touch a literal '+': urlencode() never encodes space as '+' (it
+# uses %20 and leaves '+' as an ordinary, unreserved-enough URL/path
+# character -- e.g. "C++.pdf" is valid as-is), so decoding a bare '+' back
+# to space here would corrupt any such name. (Historical bug guard: this
+# function used to also turn '+' into space, inherited from the
+# application/x-www-form-urlencoded convention, which broke the roundtrip
+# for e.g. urldecode(urlencode("a+b.pdf")) -- see form_urldecode() below
+# for the convention where '+' really does mean space.)
 #
 # IMPORTANT: this returns *bytes*, not decoded Perl characters. The result is
 # used to build local filenames and to send paths to servers, both of which are
@@ -3439,11 +3549,25 @@ sub urlencode {
 # non-ASCII names. Any caller that wants a display string can decode explicitly.
 sub urldecode {
     my $s = shift;
-    $s =~ s/\+/ /g;
     # non-standard %uXXXX -> code point -> UTF-8 bytes (done first so the
     # bytes it produces are not themselves reinterpreted)
     $s =~ s/%u([0-9A-Fa-f]{4})/Encode::encode('UTF-8', chr(hex($1)))/eg;
     # standard hex percent-encoding -> raw bytes
+    $s =~ s/%([0-9A-Fa-f]{2})/pack('C', hex($1))/eg;
+    return $s;
+}
+
+# Decode a form_urlencode()'d (application/x-www-form-urlencoded) string.
+# Same %XX/%uXXXX handling as urldecode() above, plus '+' -> space, matching
+# the convention form_urlencode() uses for POST body values / query strings.
+# Not currently called anywhere (form_urlencode()'s only caller,
+# --data-urlencode, sends its output to the server rather than decoding it
+# back), but kept as the correct, documented inverse of form_urlencode() --
+# see urldecode() above for why the two must not be conflated.
+sub form_urldecode {
+    my $s = shift;
+    $s =~ s/\+/ /g;
+    $s =~ s/%u([0-9A-Fa-f]{4})/Encode::encode('UTF-8', chr(hex($1)))/eg;
     $s =~ s/%([0-9A-Fa-f]{2})/pack('C', hex($1))/eg;
     return $s;
 }
