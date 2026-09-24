@@ -1711,8 +1711,11 @@ NO_BIN
                 say STDERR "* Ignoring the response-body" if ($is_redirected && $args{location}) && (! $fh->eof ) && ($args{verbose} || $args{debug});
                 binmode($out, ":raw"); # pass in raw layer to prevent utf8 or cr/lf conversion in binary files
 
-                if ($utf8_bom){
-                    # insert BOM if encoding was specified
+                if ($utf8_bom && !$need_capture){
+                    # insert BOM if encoding was specified.
+                    # Skip when capturing for an action (json:/xml:/bodyrx:...)
+                    # because the BOM would contaminate the buffer handed to the
+                    # parser (e.g. leading BOM makes from_json fail).
                     print $out "\x{ef}\x{bb}\x{bf}";
                 }
                 
@@ -2550,6 +2553,11 @@ sub from_json {
     my $struct;
     {
         local $_ = shift;
+        # strip a leading UTF-8 BOM (U+FEFF) if present: many servers prefix
+        # their JSON with it, and the parser (anchored with \A) would otherwise
+        # fail to match. This mirrors what most JSON parsers and curl do.
+        s/\A\x{feff}//        if defined && utf8::is_utf8($_);
+        s/\A\xEF\xBB\xBF//    if defined;
         # we do not use $^R anymore
         # local $^R;
         eval { m{\A$rx\z}; } and $struct = $_;

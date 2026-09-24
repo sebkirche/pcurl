@@ -183,6 +183,19 @@ subtest 'JSON parser - invalid json returns undef' => sub {
     ok(!defined $o, 'invalid json returns undef');
 };
 
+subtest 'JSON parser - tolerates a leading UTF-8 BOM' => sub {
+    # A raw (octet) UTF-8 BOM prefixing the body must not break parsing.
+    my $bom = "\xEF\xBB\xBF";
+    my $o = Pcurl::from_json("$bom\[{\"a\":1},{\"b\":2}]");
+    is_deeply($o, [ { a => 1 }, { b => 2 } ], 'BOM-prefixed array parses correctly');
+
+    my $obj = Pcurl::from_json("$bom\{\"k\":\"v\"}");
+    is_deeply($obj, { k => 'v' }, 'BOM-prefixed object parses correctly');
+
+    # And normal (no-BOM) JSON still works.
+    is_deeply(Pcurl::from_json('[1,2,3]'), [1,2,3], 'no-BOM array still parses');
+};
+
 # ---------------------------------------------------------------------------
 subtest 'JSON serializer - to_json' => sub {
     # scalars
