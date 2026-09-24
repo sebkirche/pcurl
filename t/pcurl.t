@@ -128,18 +128,30 @@ subtest 'urldecode - hex escapes with letters (regression: not just digits)' => 
     is(Pcurl::urldecode('%20'),     ' ',    '%20 decodes to space');
 };
 
-subtest 'urldecode - UTF-8 percent-encoding' => sub {
-    is(Pcurl::urldecode('caf%C3%A9'),  "caf\x{e9}", 'UTF-8 2-byte (é) decodes to a character');
-    is(Pcurl::urldecode('%E2%82%AC'),  "\x{20ac}",  'UTF-8 3-byte (€) decodes to a character');
-    # invalid UTF-8 must not crash: falls back to the raw byte string
-    my $bad = Pcurl::urldecode('%FF%FE');
-    ok(defined $bad, 'invalid UTF-8 sequence does not die');
+subtest 'urldecode - UTF-8 percent-encoding yields BYTES (filename-safe)' => sub {
+    # urldecode must return raw bytes, not decoded Perl characters, so that
+    # percent-encoded UTF-8 names produce valid UTF-8 filenames (critical on
+    # macOS). Regression guard for the "lone Latin-1 0xE2" filename bug.
+    is(Pcurl::urldecode('caf%C3%A9'), "caf\xC3\xA9",
+       'é stays as the 2 UTF-8 bytes C3 A9, not the char U+00E9');
+    ok(!utf8::is_utf8(Pcurl::urldecode('caf%C3%A9')),
+       'result is a byte string (not utf8-flagged)');
+    is(Pcurl::urldecode('%E2%82%AC'), "\xE2\x82\xAC",
+       '€ stays as the 3 UTF-8 bytes E2 82 AC');
+    is(Pcurl::urldecode('Ch%C3%A2teau'), "Ch\xC3\xA2teau",
+       'â in a word stays as UTF-8 bytes C3 A2 (Château filename)');
+    # invalid UTF-8 percent-escapes must not crash and are kept as raw bytes
+    is(Pcurl::urldecode('%FF%FE'), "\xFF\xFE",
+       'invalid UTF-8 sequence kept as raw bytes, no die');
 };
 
-subtest 'urldecode - non-standard %uXXXX form' => sub {
-    is(Pcurl::urldecode('%u00e9'),        "\x{e9}",   '%u00e9 -> é');
-    is(Pcurl::urldecode('%u20AC'),        "\x{20ac}", '%u20AC -> € (uppercase hex)');
-    is(Pcurl::urldecode('a%u0041b'),      'aAb',      '%uXXXX embedded in ASCII');
+subtest 'urldecode - non-standard %uXXXX form yields UTF-8 bytes' => sub {
+    is(Pcurl::urldecode('caf%u00e9'), "caf\xC3\xA9",
+       '%u00e9 (é) -> UTF-8 bytes C3 A9');
+    is(Pcurl::urldecode('%u20AC'),    "\xE2\x82\xAC",
+       '%u20AC (€) -> UTF-8 bytes E2 82 AC (uppercase hex)');
+    is(Pcurl::urldecode('a%u0041b'),  'aAb',
+       '%uXXXX ASCII code point embedded in ASCII');
 };
 
 # ---------------------------------------------------------------------------

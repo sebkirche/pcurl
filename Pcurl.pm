@@ -3388,29 +3388,30 @@ sub urlencode {
     return $s;
 }
 
-# decode an url-encoded string
+# decode an url-encoded string, returning a BYTE string
 #
 # Handles:
 #   +          -> space
-#   %XX        -> a single byte (standard RFC 3986 percent-encoding, hex)
+#   %XX        -> the single byte with that hex value (RFC 3986 percent-encoding)
 #   %uXXXX     -> a Unicode code point (non-standard form emitted by some
-#                 legacy Microsoft stacks / escape())
+#                 legacy Microsoft stacks / escape()), encoded to UTF-8 bytes
 #
-# Standard %XX escapes are byte-oriented, so after substitution the string is
-# treated as a UTF-8 byte sequence and decoded into Perl characters. The
-# %uXXXX form already denotes a code point, so it is substituted *after* the
-# UTF-8 decode to avoid double-decoding it.
+# IMPORTANT: this returns *bytes*, not decoded Perl characters. The result is
+# used to build local filenames and to send paths to servers, both of which are
+# byte-oriented. In particular, a percent-encoded UTF-8 name such as
+# "%C3%A2" (â) must yield the two bytes C3 A2 so the file is created with a
+# valid UTF-8 name (this matters on macOS, whose filesystem expects UTF-8 and
+# would mangle a lone Latin-1 0xE2 byte). Do NOT Encode::decode() here: turning
+# the bytes into characters and then writing them re-emits Latin-1 and corrupts
+# non-ASCII names. Any caller that wants a display string can decode explicitly.
 sub urldecode {
     my $s = shift;
     $s =~ s/\+/ /g;
+    # non-standard %uXXXX -> code point -> UTF-8 bytes (done first so the
+    # bytes it produces are not themselves reinterpreted)
+    $s =~ s/%u([0-9A-Fa-f]{4})/Encode::encode('UTF-8', chr(hex($1)))/eg;
     # standard hex percent-encoding -> raw bytes
     $s =~ s/%([0-9A-Fa-f]{2})/pack('C', hex($1))/eg;
-    # interpret the accumulated bytes as UTF-8; fall back to the raw string if
-    # it is not valid UTF-8 (Encode::FB_CROAK would die otherwise)
-    my $decoded = eval { Encode::decode('UTF-8', $s, Encode::FB_CROAK()) };
-    $s = $decoded if defined $decoded;
-    # non-standard %uXXXX -> Unicode code point (done after the UTF-8 decode)
-    $s =~ s/%u([0-9A-Fa-f]{4})/chr(hex($1))/eg;
     return $s;
 }
 
