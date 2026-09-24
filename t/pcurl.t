@@ -531,6 +531,44 @@ subtest 'redact_header_line - --no-auth-redact shows raw value' => sub {
 };
 
 # ---------------------------------------------------------------------------
+subtest 'discover_links - --page-requisites exempts parent-dir requisites (M4)' => sub {
+    # page in /dir/sub/; references parent-dir requisites (one relative, one as a
+    # same-host absolute URL that gets rewritten) plus a plain parent <a> link.
+    my $html = join('',
+        '<img src="../logo.png">',                          # requisite (relative)
+        '<link href="http://example.com/dir/style.css">',   # requisite (absolute url -> rewritten)
+        '<a href="../other.html">up</a>',                   # plain link, parent dir
+    );
+    my $mk = sub {
+        my $u = Pcurl::parse_uri('http://example.com/dir/sub/page.html');
+        Pcurl::complete_url_default_values($u);
+        return $u;
+    };
+
+    # explicitly set every crawler flag this test depends on, since reset_state()
+    # does not clear %args and earlier subtests may have left flags set
+    my @crawl_flags = ('relative'=>0, 'span-hosts'=>0, 'no-parent'=>1, 'header'=>[]);
+
+    # --no-parent, no --page-requisites: everything above the dir is blocked
+    Pcurl::reset_state();
+    Pcurl::simulate_cli_settings(@crawl_flags, 'page-requisites'=>0);
+    my @blocked = Pcurl::discover_links({captured=>\$html}, $mk->(), undef, undef, 1);
+    is(scalar @blocked, 0, 'without --page-requisites, parent items are blocked by --no-parent');
+
+    # --no-parent + --page-requisites: the two requisites survive (incl. the
+    # rewritten absolute-URL one), the plain link stays blocked
+    Pcurl::reset_state();
+    Pcurl::simulate_cli_settings(@crawl_flags, 'page-requisites'=>1);
+    my @kept_unsorted = Pcurl::discover_links({captured=>\$html}, $mk->(), undef, undef, 1);
+    my @kept = sort @kept_unsorted;
+    is_deeply(\@kept,
+              [ 'http://example.com/dir/logo.png', 'http://example.com/dir/style.css' ],
+              'requisites in parent dir kept (incl. rewritten absolute URL); plain link blocked');
+
+    Pcurl::reset_state();
+    Pcurl::simulate_cli_settings('no-parent'=>0, 'page-requisites'=>0, 'header'=>[], 'user-agent'=>'pCurl-test');
+};
+
 subtest 'discover_links - --relative keeps only relative links (M2)' => sub {
     my $html = join('',
         '<a href="sub/rel.html">rel</a>',

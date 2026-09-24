@@ -2189,15 +2189,19 @@ sub discover_links {
                 |import \s+ .* \s+ from \s+ "([^"]+)";
                 )}gix; # dumb link collector
 
-    my %requisites;
-    map { $requisites{$_}++ } @resources;
-    my @reqs = (@links, @resources);
+    # Tag each candidate with whether it is a page requisite (img/link/css/js)
+    # rather than a plain <a>/<frame> link. The flag travels *with* the item so
+    # that the later --page-requisites test is not defeated by $r being
+    # rewritten (scheme added, spaces encoded, same-host URL reduced to a path).
+    my @reqs = ( (map { [ $_, 0 ] } @links),
+                 (map { [ $_, 1 ] } @resources) );
     
     # say for @reqs;
     my @discovered_urls;
     my %dups;
   RES:
-    for my $r (@reqs){          # build the list of urls from the anchors/hrefs
+    for my $req_item (@reqs){   # build the list of urls from the anchors/hrefs
+        my ($r, $is_requisite) = @$req_item;
 
         # fix URLs when scheme is missing
         if ($r !~ m{^https?://} && index($r, '//') == 0){
@@ -2289,8 +2293,9 @@ sub discover_links {
         # avoid getting too much of a site if unwanted
         my $canon = canonicalize($p);
         my $current_path = no_parent_boundary($url->{path});
-        if ($args{'page-requisites'} && $requisites{$r}){
-            # nothing special
+        if ($args{'page-requisites'} && $is_requisite){
+            # a page requisite is fetched even if it lives above the current
+            # directory (exempt from --no-parent)
         } elsif (!is_descendant_or_equal($canon, $current_path) && $args{'no-parent'}){
             next;
         }
