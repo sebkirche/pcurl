@@ -75,6 +75,28 @@ subtest 'parse_uri - scheme variations' => sub {
     is($s->{port},   61613,             'stomp port');
 };
 
+subtest 'parse_uri - percent-encoded and unicode paths' => sub {
+    # standard percent-encoding (hex letters) must be accepted
+    my $p = Pcurl::parse_uri('http://example.com/a%2Fb%3Dc');
+    ok($p, 'parsed url with %XX hex escapes');
+    is($p->{path}, '/a%2Fb%3Dc', 'percent-encoded path preserved');
+
+    # non-standard %uXXXX form must be accepted in the path
+    my $u = Pcurl::parse_uri('http://example.com/path/%u00e9dir/file');
+    ok($u, 'parsed url with %uXXXX escape');
+    is($u->{path}, '/path/%u00e9dir/file', '%uXXXX path preserved');
+
+    # raw UTF-8 bytes in the path must be accepted (byte-oriented input)
+    no utf8;
+    my $r = Pcurl::parse_uri("http://example.com/caf\xC3\xA9/x");
+    ok($r, 'parsed url with raw UTF-8 bytes in path');
+
+    # a query with a percent-encoded value still parses
+    my $q = Pcurl::parse_uri('http://example.com/s?q=%25BACKUP%25');
+    ok($q, 'parsed url with percent-encoded query');
+    is($q->{query}, 'q=%25BACKUP%25', 'query preserved');
+};
+
 # ---------------------------------------------------------------------------
 subtest 'complete_url_default_values - default ports' => sub {
     my $u = Pcurl::parse_uri('http://example.com/');
@@ -96,6 +118,28 @@ subtest 'urlencode / urldecode roundtrip' => sub {
     for my $s ('hello world', 'x=1&y=2', 'path/seg') {
         is(Pcurl::urldecode(Pcurl::urlencode($s)), $s, "roundtrip: '$s'");
     }
+};
+
+subtest 'urldecode - hex escapes with letters (regression: not just digits)' => sub {
+    # Historical bug guard: %XX must decode hex letters A-F, not only digits.
+    is(Pcurl::urldecode('a%2Fb'),   'a/b',  '%2F (letter F) decodes to /');
+    is(Pcurl::urldecode('x%3Dy'),   'x=y',  '%3D decodes to =');
+    is(Pcurl::urldecode('%2C'),     ',',    '%2C decodes to ,');
+    is(Pcurl::urldecode('%20'),     ' ',    '%20 decodes to space');
+};
+
+subtest 'urldecode - UTF-8 percent-encoding' => sub {
+    is(Pcurl::urldecode('caf%C3%A9'),  "caf\x{e9}", 'UTF-8 2-byte (é) decodes to a character');
+    is(Pcurl::urldecode('%E2%82%AC'),  "\x{20ac}",  'UTF-8 3-byte (€) decodes to a character');
+    # invalid UTF-8 must not crash: falls back to the raw byte string
+    my $bad = Pcurl::urldecode('%FF%FE');
+    ok(defined $bad, 'invalid UTF-8 sequence does not die');
+};
+
+subtest 'urldecode - non-standard %uXXXX form' => sub {
+    is(Pcurl::urldecode('%u00e9'),        "\x{e9}",   '%u00e9 -> é');
+    is(Pcurl::urldecode('%u20AC'),        "\x{20ac}", '%u20AC -> € (uppercase hex)');
+    is(Pcurl::urldecode('a%u0041b'),      'aAb',      '%uXXXX embedded in ASCII');
 };
 
 # ---------------------------------------------------------------------------

@@ -21,6 +21,7 @@ use version;
 use Data::Dumper;
 $Data::Dumper::Sortkeys = 1;
 $Data::Dumper::Indent   = 2;
+use Encode ();
 use Getopt::Long qw(:config no_ignore_case bundling auto_version); # debug
 use IO::Select;
 use IO::Socket::INET;
@@ -2973,15 +2974,19 @@ sub parse_uri {
           (?<PATH_EMPTY>                                                         ) # empty rule
           (?<SEGMENT>       (?&PCHAR)*                                           )
           (?<SEGMENT_NZ>    (?&PCHAR)+                                           )
-          (?<SEGMENT_NZ_NC> (?&UNRESERVED) | (?&PCTENCODED) | (?&SUBDEL) | @     )
-          (?<PCHAR>         (?&UNRESERVED) | (?&PCTENCODED) | (?&SUBDEL) | : | @ )
+          (?<SEGMENT_NZ_NC> (?&UNRESERVED) | (?&PCTENCODED) | (?&PCTENCODEDU) | (?&SUBDEL) | @     )
+          (?<PCHAR>         (?&UNRESERVED) | (?&PCTENCODED) | (?&PCTENCODEDU) | (?&SUBDEL) | : | @ )
           (?<PCTENCODED>    % (?&HEXDIG) (?&HEXDIG)                              ) # Percent encoded
-          (?<HEXDIG>        [0-9A-Za-z]                                          ) # hexadecimal digit
-          (?<UNRESERVED>    [A-Za-z0-9._~-]                                      )
+          (?<PCTENCODEDU>   % u (?&HEXDIG) (?&HEXDIG) (?&HEXDIG) (?&HEXDIG)      ) # Non-standard %uXXXX (e.g. from some MS stacks)
+          (?<HEXDIG>        [0-9A-Fa-f]                                          ) # hexadecimal digit
+          (?<MULTI2>        [\xC2-\xDF] [\x80-\xBF]                              ) # utf-8 2 bytes char
+          (?<MULTI3>        [\xE0-\xEF] [\x80-\xBF] [\x80-\xBF]                  ) # utf-8 3 bytes char
+          (?<MULTI4>        [\xF0-\xF4] [\x80-\xBF] [\x80-\xBF] [\x80-\xBF]      ) # utf-8 4 bytes char
+          (?<UNRESERVED>    [A-Za-z0-9._~-] | (?&MULTI2) | (?&MULTI3) | (?&MULTI4) )
           #(?<RESERVED>     (?&GENDEL) | (?&SUBDEL)                              ) # reserved
           #(?<GENDEL>       [:/?\#\[\]@]                                         ) # generic delimiters
           (?<SUBDEL>        [!\$&'()\*\+,;=\.]                                   ) # subcomponent delimiters
-          (?<USERCHARS>     (?&UNRESERVED) | (?&PCTENCODED) | (?&SUBDEL)         ) 
+          (?<USERCHARS>     (?&UNRESERVED) | (?&PCTENCODED) | (?&PCTENCODEDU) | (?&SUBDEL) ) 
           (?<HOSTCHARS>     (?&IPLIT) | (?&IPV4) | (?&REG_NAME)                  )
           (?<IPLIT>         \[ ( (?&IPV6) | (?&IPFUTURE) ) \]                    ) # IP literal
           (?<IPFUTURE>      v (?&HEXDIG)+ \. ( (?&UNRESERVED) | (?&SUBDEL) | :)+ ) # future versions of IP
@@ -3107,10 +3112,28 @@ sub urlencode {
 }
 
 # decode an url-encoded string
+#
+# Handles:
+#   +          -> space
+#   %XX        -> a single byte (standard RFC 3986 percent-encoding, hex)
+#   %uXXXX     -> a Unicode code point (non-standard form emitted by some
+#                 legacy Microsoft stacks / escape())
+#
+# Standard %XX escapes are byte-oriented, so after substitution the string is
+# treated as a UTF-8 byte sequence and decoded into Perl characters. The
+# %uXXXX form already denotes a code point, so it is substituted *after* the
+# UTF-8 decode to avoid double-decoding it.
 sub urldecode {
     my $s = shift;
     $s =~ s/\+/ /g;
-    $s =~ s/%(..)/pack('c', hex($1))/eg;
+    # standard hex percent-encoding -> raw bytes
+    $s =~ s/%([0-9A-Fa-f]{2})/pack('C', hex($1))/eg;
+    # interpret the accumulated bytes as UTF-8; fall back to the raw string if
+    # it is not valid UTF-8 (Encode::FB_CROAK would die otherwise)
+    my $decoded = eval { Encode::decode('UTF-8', $s, Encode::FB_CROAK()) };
+    $s = $decoded if defined $decoded;
+    # non-standard %uXXXX -> Unicode code point (done after the UTF-8 decode)
+    $s =~ s/%u([0-9A-Fa-f]{4})/chr(hex($1))/eg;
     return $s;
 }
 
