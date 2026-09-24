@@ -4124,7 +4124,16 @@ Specify an accepted MIME type. This is simply a shortcut for -H 'Accept: your/ty
 
 =item --action <spec>
 
-Perform an action on the response. It can be the display of a value (from header, regex on body, json path).
+Perform an action on the response. It can be the display of a value (from header, regex on body, json path). The spec is given in the form type:value. Supported action types are:
+
+    header          return the response header 'value'
+    bodyrx          return the regex match from the response body
+    listlinks       discover the linked resources from the given URL
+    getlinked       discover all the dependencies recursively
+    getlinked-tree  discover all the dependencies recursively, keeping the tree
+    json            return the xpath-like value from a json response
+    xml             return the xpath-like value from an xml response
+    help            list the supported actions and exit
 
 =item --action-nullable-values
 
@@ -4322,6 +4331,18 @@ Specify the method for the request. Common methods are GET, HEAD, POST, PUT, TRA
 
 Silent mode
 
+=item --cacert, --ssl-ca <file>
+
+Use the given file as the CA certificate bundle to verify the peer for HTTPS. The path is passed to OpenSSL as its -CAfile option.
+
+=item --cert, --ssl-cert <file>
+
+Use the given client certificate file for HTTPS. The path is passed to OpenSSL as its -cert option.
+
+=item --key, --ssl-key <file>
+
+Use the given private key file for the client certificate. The path is passed to OpenSSL as its -key option.
+
 =item -3, --sslv3
 
 Force the usage of SSL v3 for openSSL tunneling
@@ -4329,6 +4350,10 @@ Force the usage of SSL v3 for openSSL tunneling
 =item --stompmsg <message>
 
 Content of the message for the STOMP message broker. Use with a stomp://server:port/queuename url. 
+
+=item --stompread
+
+Subscribe to the STOMP destination given in the stomp:// URL and print the received messages. This is the read counterpart of --stompmsg.
 
 =item --tcp-nodelay, --notcp-nodelay
 
@@ -4393,6 +4418,8 @@ Wait between each request.
 In web-crawling mode, a first resource is retrieved then in a recursive way, all related resources (linked html, pictures, css) are also retrieved. 
 
 By default a number of 5 successive jumps from initial url are processed. All the files are stored under a common directory named after the host.
+
+=over 4
 
 =item --accept-list <coma-separated list>
 
@@ -4462,7 +4489,11 @@ Allow to process resources from external web sites. Beware if you set also --lev
 
 Ask for a final list of retrieved resources, if you do not want to see other details.
 
+=back
+
 =head2 Examples
+
+=over 4
 
 =item parse an URI to show its components
 
@@ -4475,6 +4506,8 @@ Ask for a final list of retrieved resources, if you do not want to see other det
 =item Get a page and all its direct linked resources (without going up to parent)
 
     pcurl -ORL --recursive --no-parent --page-requisites --no-host-directories --level 1 --recursive-flat --cut-dirs 2  --progression https://path
+
+=back
 
 =cut
 

@@ -21,6 +21,7 @@ I am planning to implement a limited set of decision structures (`if`, `case`) c
 Perl limited dependencies are:
 
 * Data::Dumper
+* Encode
 * Getopt::Long
 * IO::Select, IO::Socket::INET and Socket
 * IPC::Open3 (to call openSSL and pipe its IO on our STDIN and STDOUT)
@@ -48,7 +49,17 @@ Options
 
     --action <spec>
         Perform an action on the response. It can be the display of a value
-        (from header, regex on body, json path)
+        (from header, regex on body, json path). The spec is given in the
+        form type:value. Supported action types are:
+
+            header          return the response header 'value'
+            bodyrx          return the regex match from the response body
+            listlinks       discover the linked resources from the given URL
+            getlinked       discover all the dependencies recursively
+            getlinked-tree  discover all the dependencies recursively, keeping the tree
+            json            return the xpath-like value from a json response
+            xml             return the xpath-like value from an xml response
+            help            list the supported actions and exit
 
     --action-nullable-values
         If set an action can return null values, else it fails if the result
@@ -90,6 +101,17 @@ Options
 
     --data-urlencode <data>
         Similar to --data-raw, but the data will be url-encoded.
+
+    -f, --fail
+        Do not continue on 4xx and 5xx results and return an error. Body
+        response is not returned.
+
+    --fail-with-body
+        Do not continue on 4xx and 5xx results and return an error. Body
+        response is returned.
+
+    --get-curl-command
+        Get the equivalent curl command line when possible.
 
     -I, --head
         Show the document headers only. The shorthand notation for -X HEAD.
@@ -150,7 +172,16 @@ Options
         session cookies (those with no expire date).
 
     -L, --location, --follow
-        Follow HTTP redirects.
+        Follow HTTP redirects. When a redirect changes the host, the
+        Authorization header derived from --basic / --user is not resent to
+        the new host, matching curl's default behavior. See
+        --location-trusted to override.
+
+    --location-trusted
+        Like --location, but allows sending the --basic / --user credentials
+        (Authorization header) to all hosts a redirect leads to, even when
+        the host changes. Use with care, as this may leak your credentials to
+        other hosts.
 
     --man
         Display the full manual.
@@ -162,6 +193,15 @@ Options
     --max-redirs <number>
         Specify the maximum number of redirects to follow. Default is 50.
 
+    --no-auth-redact
+        By default, when showing the request in verbose (-v) or debug mode,
+        pcurl masks the credential value of Authorization and
+        Proxy-Authorization headers (and the proxy password in the OpenSSL
+        command line) as '***REDACTED***' to avoid accidental credential
+        leaks in logs or on screen. Note this differs from curl, which shows
+        the raw value. Pass --no-auth-redact to disable the masking and
+        display the raw values (useful for debugging authentication).
+
     --noproxy <domain_list>
         Define a coma-separated list of domains that ignore the proxy.
 
@@ -172,10 +212,16 @@ Options
         Shortcut for "--content octet-stream", will result in a
         "Content-Type: octet-stream" header.
 
+    --parse-only <url>
+        Debug usage: parse an url and show its attributes.
+
     --port <port>
         Specify explicitly the port. If not used, we use the port from the
         url (if specified), or we will try well-known port 80 for HTTP and
         443 for HTTPS, depending on the url scheme.
+
+    --progression
+        Shows the name of retrieved files and their size.
 
     -x, --proxy <proxy_url>
         Set the url of the HTTP/1.1 proxy to use.
@@ -190,6 +236,9 @@ Options
         Specify a string for the referer. If followed by ";auto", when
         following redirections, reuse the previous url as referer. ";auto"
         can also be used alone with redirections.
+
+    --random-wait
+        When using --wait, randomize the delay between 0.5 and 1.5 times.
 
     -J, --remote-header-name
         With -O --remote-name, use the name provided by Content-disposition:
@@ -211,12 +260,29 @@ Options
     -s, --silent
         Silent mode - argument compatibility w/ curl, pcurl is silent by default
 
+    --cacert, --ssl-ca <file>
+        Use the given file as the CA certificate bundle to verify the peer
+        for HTTPS. The path is passed to OpenSSL as its -CAfile option.
+
+    --cert, --ssl-cert <file>
+        Use the given client certificate file for HTTPS. The path is passed
+        to OpenSSL as its -cert option.
+
+    --key, --ssl-key <file>
+        Use the given private key file for the client certificate. The path
+        is passed to OpenSSL as its -key option.
+
     -3, --sslv3
         Force the usage of SSL v3 for openSSL tunneling
 
     --stompmsg <message>
         Content of the message for the STOMP message broker. Use with a
         stomp://server:port/queuename url.
+
+    --stompread
+        Subscribe to the STOMP destination given in the stomp:// URL and
+        print the received messages. This is the read counterpart of
+        --stompmsg.
 
     --tcp-nodelay, --notcp-nodelay
         Disable the Nagle's algorithm for TCP communication (do not wait for
@@ -261,6 +327,9 @@ Options
     --xml-root-element <name>
         Use the given name for the root element of XML.
 
+    -w, --wait <seconds>
+        Wait between each request.
+
 Web crawling features:
 
     In web-crawling mode, a first resource is retrieved then in a recursive
@@ -279,6 +348,10 @@ Web crawling features:
 
     --cut-dirs <number of levels>
         Specify a number of path levels to remove from all links.
+
+    --debug-urls
+        Show urls discovered in each html/css file when running in recursive
+        mode.
 
     --directory-prefix <common path>
         Specify a path to prepend for all retrieved resources.
