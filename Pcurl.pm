@@ -2278,8 +2278,7 @@ sub discover_links {
         }
         # avoid getting too much of a site if unwanted
         my $canon = canonicalize($p);
-        my $current_path = canonicalize($url->{path});
-        $current_path =~ s{[^/]*$}{};
+        my $current_path = no_parent_boundary($url->{path});
         if ($args{'page-requisites'} && $requisites{$r}){
             # nothing special
         } elsif (!is_descendant_or_equal($canon, $current_path) && $args{'no-parent'}){
@@ -2357,6 +2356,31 @@ sub auth_string {
     return $auth . '@';
 }
     
+# Derive the "current directory" boundary used by --no-parent from a page path.
+#
+# The tricky case is a page path with no trailing slash: is the last segment a
+# file (so the boundary is its parent directory) or a directory served without
+# the redirect to '.../'? Blindly stripping the last segment collapses '/dir'
+# to '/', which turns --no-parent into a no-op. We use a heuristic: a final
+# segment containing a '.' looks like a file and is stripped; otherwise the path
+# is treated as a directory and kept (with a trailing slash). Paths that already
+# end in '/' are kept as-is.
+sub no_parent_boundary {
+    my $path = canonicalize(shift // '');
+    return $path if $path =~ m{/$};        # already a directory
+    if ($path =~ m{/([^/]*)$}){
+        my $last = $1;
+        if ($last =~ /\./){
+            # looks like a file -> boundary is its parent directory
+            $path =~ s{[^/]*$}{};
+        } else {
+            # looks like a directory served without a trailing slash
+            $path .= '/';
+        }
+    }
+    return $path;
+}
+
 sub is_descendant_or_equal {
     my ($other, $current) = @_;
 

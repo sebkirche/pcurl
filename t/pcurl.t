@@ -170,6 +170,36 @@ subtest 'is_descendant_or_equal' => sub {
     ok(!Pcurl::is_descendant_or_equal('/a',     '/a/b'),  'parent is not descendant');
     ok( Pcurl::is_descendant_or_equal('/x/y',   '/'),     'anything descends from root');
     ok(!Pcurl::is_descendant_or_equal('/a/x',   '/a/b'),  'sibling is not descendant');
+    # segment-wise, so prefix look-alikes are not descendants
+    ok(!Pcurl::is_descendant_or_equal('/dirty/x', '/dir'), 'prefix look-alike is not descendant');
+};
+
+subtest 'no_parent_boundary - directory vs file heuristic (M1)' => sub {
+    # trailing slash: kept as-is
+    is(Pcurl::no_parent_boundary('/dir/'),        '/dir/',  'trailing-slash path kept');
+    # slash-less directory-looking path: treated as a directory (bug fix -
+    # previously collapsed to "/", making --no-parent a no-op)
+    is(Pcurl::no_parent_boundary('/dir'),         '/dir/',  'slash-less dir path becomes /dir/');
+    # file-looking last segment (has a dot): boundary is the parent directory
+    is(Pcurl::no_parent_boundary('/dir/page.html'), '/dir/', 'file path -> parent directory');
+    is(Pcurl::no_parent_boundary('/a/b.html'),    '/a/',    'nested file -> parent directory');
+    # root
+    is(Pcurl::no_parent_boundary('/'),            '/',      'root stays root');
+};
+
+subtest 'no-parent boundary + descendant check (M1 end-to-end)' => sub {
+    my $check = sub {
+        my ($page, $link) = @_;
+        my $b = Pcurl::no_parent_boundary($page);
+        return Pcurl::is_descendant_or_equal(Pcurl::canonicalize($link), $b) ? 1 : 0;
+    };
+    # the regression: a slash-less directory page must still constrain siblings
+    is($check->('/dir', '/dir/x'), 1, 'child allowed under slash-less dir page');
+    is($check->('/dir', '/other'), 0, 'sibling BLOCKED under slash-less dir page (was the bug)');
+    # unchanged good behavior
+    is($check->('/dir/page.html', '/dir/other'), 1, 'sibling file allowed');
+    is($check->('/dir/page.html', '/x.html'),    0, 'parent blocked');
+    is($check->('/dir/', '/dirty/x'),            0, 'prefix look-alike blocked');
 };
 
 # ---------------------------------------------------------------------------
