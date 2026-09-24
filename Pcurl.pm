@@ -40,6 +40,7 @@ $|++; # auto flush messages
 # -------- Tunable constants -----------------------
 my $IO_BUFFER_SIZE       = 1024 * 1024;     # buffer size for file/socket reads (1 MiB)
 my $HTTP_BODY_READ_SIZE  = 2 * 1024 * 1024; # read size for non-chunked HTTP response body (2 MiB)
+my $MAX_CHUNK_SIZE       = 256 * 1024 * 1024; # sanity cap for a single chunked-transfer chunk (256 MiB)
 my $FILE_READ_CHUNK      = 1024;            # chunk size for file:// reads
 my $TUNNEL_ERR_READ_SIZE = 4096;            # read size for OpenSSL tunnel STDERR
 my $TUNNEL_PROBE_TIMEOUT = 0.5;             # seconds to probe a proxied tunnel for early errors (e.g. 407)
@@ -1746,13 +1747,37 @@ NO_BIN
                         last CHUNK unless defined $line;
                         # say STDERR sprintf("%*vX", ' ', $line); # vector dump = simple hex dump
                         $line =~ s/[\r\n]+$//;
+                        $line =~ s/;.*$//;      # drop any chunk extension (RFC 7230: "1a;name=value")
+                        $line =~ s/^\s+//;      # tolerate leading whitespace
+                        $line =~ s/\s+$//;
+                        # the chunk size must be a hexadecimal number; reject junk
+                        # instead of letting hex() silently misparse it
+                        unless ($line =~ /^[0-9A-Fa-f]+$/){
+                            say STDERR "* Malformed chunk size line: '$line' - stopping" if $args{verbose} || $args{debug};
+                            last CHUNK;
+                        }
                         $chunk_len = hex($line); # block size is in hex ascii
-                        say STDERR sprintf("* Next block is %d (0x%x) bytes long", $chunk_len, $chunk_len) if $args{debug}; 
+                        say STDERR sprintf("* Next block is %d (0x%x) bytes long", $chunk_len, $chunk_len) if $args{debug};
+                        # a zero-length chunk terminates the body
+                        last CHUNK if $chunk_len == 0;
+                        # sanity cap to avoid a hostile/buggy server making us
+                        # attempt an enormous allocation
+                        if ($chunk_len > $MAX_CHUNK_SIZE){
+                            say STDERR sprintf("* Chunk size %d exceeds cap %d - stopping", $chunk_len, $MAX_CHUNK_SIZE);
+                            last CHUNK;
+                        }
                     }
                     my $buf_size = $chunked_mode ? $chunk_len : $HTTP_BODY_READ_SIZE;
                     if ($buf_size){
-                        my $bytes = $fh->read($buf, $buf_size);
-                        if ($bytes){
+                        # a single read() may return fewer bytes than requested
+                        # (especially on a socket); loop until the chunk / block
+                        # is fully consumed
+                        my $remaining = $buf_size;
+                        while ($remaining > 0){
+                            my $want = $chunked_mode ? $remaining
+                                                     : ($remaining > $HTTP_BODY_READ_SIZE ? $HTTP_BODY_READ_SIZE : $remaining);
+                            my $bytes = $fh->read($buf, $want);
+                            last unless $bytes;   # EOF or error
                             if (defined($content_length) && $args{progression} && !$args{debug}){
                                 $prog += $bytes;
                                 my $pchars = $BAR_LENGTH / $content_length * $prog;
@@ -1767,6 +1792,9 @@ NO_BIN
                             say STDERR "* Read $bytes bytes" if $args{debug};
                             $received += $bytes;
                             print $out $buf unless ($is_redirected && $args{location}); # print to STDOUT or memory buffer
+                            $remaining -= $bytes;
+                            # in non-chunked mode we just keep reading until EOF
+                            last if !$chunked_mode;
                         }
                     }
                     if ($chunked_mode){
