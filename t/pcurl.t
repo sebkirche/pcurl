@@ -531,6 +531,44 @@ subtest 'redact_header_line - --no-auth-redact shows raw value' => sub {
 };
 
 # ---------------------------------------------------------------------------
+subtest 'discover_links - --relative keeps only relative links (M2)' => sub {
+    my $html = join('',
+        '<a href="sub/rel.html">rel</a>',
+        '<a href="../up.html">rel-dotdot</a>',
+        '<a href="/abs/path.html">abs-path</a>',
+        '<a href="http://example.com/other.html">abs-url-samehost</a>',
+        '<a href="http://other.example.org/x.html">abs-url-offhost</a>',
+    );
+    my $mk_url = sub {
+        my $u = Pcurl::parse_uri('http://example.com/dir/page.html');
+        Pcurl::complete_url_default_values($u);
+        return $u;
+    };
+
+    for my $keep_tree (0, 1){
+        Pcurl::reset_state();
+        Pcurl::simulate_cli_settings(
+            'relative' => 1, 'span-hosts' => 1, 'no-parent' => 0, 'header' => [] );
+        my $resp = { captured => \$html };
+        my @rel = Pcurl::discover_links($resp, $mk_url->(), undef, undef, $keep_tree);
+        my @rel_sorted = sort @rel;
+        is_deeply(\@rel_sorted,
+                  [ 'http://example.com/dir/sub/rel.html', 'http://example.com/up.html' ],
+                  "keep_tree=$keep_tree: only the two relative links kept");
+    }
+
+    # sanity: without --relative all five are discovered
+    Pcurl::reset_state();
+    Pcurl::simulate_cli_settings(
+        'relative' => 0, 'span-hosts' => 1, 'no-parent' => 0, 'header' => [] );
+    my $resp = { captured => \$html };
+    my @all = Pcurl::discover_links($resp, $mk_url->(), undef, undef, 1);
+    is(scalar @all, 5, 'without --relative, all links (incl. absolute) discovered');
+
+    Pcurl::reset_state();
+    Pcurl::simulate_cli_settings( 'relative' => 0, 'span-hosts' => 0, 'header' => [], 'user-agent' => 'pCurl-test' );
+};
+
 subtest 'canonical_url - equivalent URLs map to one dedup key (H3)' => sub {
     my $key = sub {
         my $u = Pcurl::parse_uri($_[0]);

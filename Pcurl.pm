@@ -2217,6 +2217,16 @@ sub discover_links {
         next RES if $r =~ /^ftp:/;    # avoid ftp links
 
         $dups{$r}++;
+
+        # classify the link's *original* form before any rewriting:
+        # a relative link is neither an absolute URL (scheme://...) nor an
+        # absolute path (starting with '/'). --relative keeps only these.
+        my $is_relative = ($r !~ m{^\w+://} && $r !~ m{^/}) ? 1 : 0;
+        if ($args{relative} && !$is_relative){
+            say STDERR "Rejecting non-relative link (--relative): $r" if $args{debug} || $args{'debug-urls'};
+            next RES;
+        }
+
         my $local_dest = '';
         if ($r =~ /^https?:/){
             # arbitrary fully qualified url
@@ -2255,8 +2265,8 @@ sub discover_links {
             $local_dest =~ s{^.*/}{};
         } else {
             # we keep the tree structure
+            # (--relative filtering is handled uniformly near the top of the loop)
             if ($r =~ m{^/}){
-                next if $args{relative}; # ignore if we want only relative links
                 $local_dest = $r;
             } else {
                 if ($parent_dir){
