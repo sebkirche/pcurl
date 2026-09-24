@@ -542,12 +542,9 @@ sub process_loop {
         # complete some default values in case of relative link
         $url = complete_url_default_values($url);
 
-        my $ustr = sprintf("%s://%s%s%s%s",
-                            $url->{scheme},
-                            auth_string($url),
-                            $url->{host} || '',
-                            defined $url->{port} ? sprintf(':%d', $url->{port}) : '',
-                            canonicalize($url->{path}));
+        # canonical dedup key: equivalent URLs (default port, '.'/'..',
+        # trailing slash) map to the same string, shared with discover_links
+        my $ustr = ($url->{scheme} =~ /^http/) ? canonical_url($url) : $req;
         $asset_counter++;
         if ($url->{scheme} =~ /^http/){
             # HTTP or HTTPS
@@ -584,8 +581,8 @@ sub process_loop {
             }
             #$url->{path} = '*' if $method eq 'OPTIONS';
             # say STDERR $url->{url} if $args{progression} || $args{verbose} || $args{debug};
-            unless (exists $processed_request{$req}){
-                # lazy downloader: do it only once
+            unless (exists $processed_request{$ustr}){
+                # lazy downloader: do it only once (keyed on the canonical url)
                 my $r = process_http(method     => $method,
                                      url        => $url,
                                      discovered => ($level ||
@@ -594,7 +591,7 @@ sub process_loop {
                 # response might be undef after a timeout: handle that case
                 # explicitly instead of relying on autovivification of $r.
                 if (defined $r){
-                    $failed_url{$req} = $r->{status}{code} if defined $r->{status} && $r->{status}{code} >= 400 && $r->{status}{code} <= 599;
+                    $failed_url{$ustr} = $r->{status}{code} if defined $r->{status} && $r->{status}{code} >= 400 && $r->{status}{code} <= 599;
 
                     say STDERR sprintf("%s -> %d / %s",
                                        $url->{url},
@@ -603,7 +600,7 @@ sub process_loop {
                         ) if $r->{body_byte_len} && ($args{progression} || $args{verbose} || $args{debug});
                 }
             }
-            $processed_request{$req}++;
+            $processed_request{$ustr}++;
             
         } elsif ($url->{scheme} =~ /^stomp(?:\+ssl)?$/){
             unless ($url->{path} && ($args{stompmsg} || $args{stompread})){
@@ -2306,14 +2303,9 @@ sub discover_links {
         }
         
         $p = $canon;
-        my $user_info = auth_string($url);
-        my $authority = $url->{host};
-        $authority = $user_info . $authority if $user_info;
-        $authority .= sprintf(":%s", $url->{port}) if $url->{port} != $defports{$url->{scheme}};
-        my $u = sprintf("%s://%s%s",
-                        $url->{scheme},
-                        $authority,
-                        $p);
+        # build the discovered link's absolute URL with the same canonical form
+        # used for dedup in process_loop (shared helper => identical keys)
+        my $u = canonical_url($url, $p);
         
         $rel_url_to_local_dir{$u} = $local_dest if $local_dest; # store the local relative path
         unless(exists $discovered_url{$u}){
@@ -2336,6 +2328,22 @@ sub discover_links {
 
 sub to_absolute_url {
     
+}
+
+# Build a canonical absolute URL string for a parsed url hash, used as the
+# single dedup key across the crawler (both %processed_request and
+# %discovered_url). The port is only included when it differs from the scheme
+# default, and the path is canonicalized, so equivalent URLs (default port
+# present/absent, '.'/'..'/trailing-slash variations) map to the same key.
+# An optional $path_override lets discover_links pass an already-computed
+# canonical path for a discovered link on the same authority.
+sub canonical_url {
+    my ($url, $path_override) = @_;
+    my $port = $url->{port} // $defports{$url->{scheme}};
+    my $authority = auth_string($url) . ($url->{host} // '');
+    $authority .= ":$port" if defined $port && $port != ($defports{$url->{scheme}} // -1);
+    my $path = defined $path_override ? $path_override : canonicalize($url->{path} // '');
+    return sprintf("%s://%s%s", $url->{scheme}, $authority, $path);
 }
 
 # Return the userinfo prefix for an authority, ready to splice before the host:

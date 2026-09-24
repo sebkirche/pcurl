@@ -501,6 +501,36 @@ subtest 'redact_header_line - --no-auth-redact shows raw value' => sub {
 };
 
 # ---------------------------------------------------------------------------
+subtest 'canonical_url - equivalent URLs map to one dedup key (H3)' => sub {
+    my $key = sub {
+        my $u = Pcurl::parse_uri($_[0]);
+        Pcurl::complete_url_default_values($u);
+        return Pcurl::canonical_url($u);
+    };
+    # default port present/absent collapse
+    is($key->('http://example.com/a/b'), $key->('http://example.com:80/a/b'),
+       'http default port 80 is normalized away');
+    is($key->('https://example.com/x'), $key->('https://example.com:443/x'),
+       'https default port 443 is normalized away');
+    # dot-segments collapse
+    is($key->('http://example.com/a/./b'), $key->('http://example.com/a/b'),
+       'single-dot segment normalized');
+    is($key->('http://example.com/a/../c'), $key->('http://example.com/c'),
+       'double-dot segment normalized');
+    # a non-default port is preserved and distinguishes the key
+    isnt($key->('http://example.com:8080/a'), $key->('http://example.com/a'),
+       'non-default port kept distinct');
+    # userinfo is included in the canonical form
+    like($key->('http://alice:secret@example.com/p'), qr{alice:secret\@example\.com},
+       'userinfo preserved in canonical url');
+
+    # path override (as used by discover_links for a discovered link)
+    my $u = Pcurl::parse_uri('http://example.com/dir/page');
+    Pcurl::complete_url_default_values($u);
+    is(Pcurl::canonical_url($u, '/other/res'), 'http://example.com/other/res',
+       'path override builds the discovered-link url');
+};
+
 subtest 'auth_string' => sub {
     # uses the nested {auth}{user}/{password} shape produced by parse_uri
     my $u = { auth => { user => 'bob', password => 'pw' } };
