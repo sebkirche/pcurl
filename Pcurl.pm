@@ -44,6 +44,8 @@ use Time::Local;
 # compile this file cleanly under `use strict`.
 use if $^O eq 'MSWin32', 'Win32API::File';
 use if $^O eq 'MSWin32', 'Win32';
+use if $^O eq 'MSWin32', 'Win32::API';
+use if $^O eq 'MSWin32', 'Win32::Console';
 
 our $VERSION = '0.9.12';
 $|++; # auto flush messages
@@ -614,12 +616,12 @@ sub process_loop {
                 if ($args{timestamping} && $method eq 'GET'
                     && !$args{head} && !$args{action}){
                     my $local = local_path_for($url);
-                    if (defined $local && $local ne '-' && -f $local){
+                    if (defined $local && $local ne '-' && file_exists($local)){ # see file_stat()'s comment (Windows + non-ASCII path)
                         crawl_delay();          # wait once, before the HEAD
                         $did_head_delay = 1;
                         my $head = head_request($url);
                         if ($head && is_up_to_date($local, $head->{headers})){
-                            say STDERR "* $url->{url} -> up to date, not retrieved ($local)"
+                            print_display_line("* $url->{url} -> up to date, not retrieved (" . decode_for_display($local) . ")")
                                 if $args{progression} || $args{verbose} || $args{debug};
                             # Even though the page body is unchanged, still
                             # discover the resources it references (a requisite
@@ -717,48 +719,11 @@ sub redirect_output_to_file {
     # say STDERR "redirect -> $out_name";
     if ($out_name && $out_name ne '-'){
         # open $STDOLD, '>&', STDOUT;
-        my $new_fd = gensym();
-        if ($^O eq 'MSWin32' && !ref($out_name)){
-            # Windows needs a different path here than macOS/Linux because
-            # the two kinds of filesystem disagree on what a filename *is*.
-            # macOS/Linux filesystems store a filename as an opaque byte
-            # string, which by convention is UTF-8 -- that's why urldecode()
-            # deliberately returns raw bytes (see its own comment): handing
-            # those bytes straight to open() is exactly right there. NTFS,
-            # on Windows, does not store bytes at all: it stores UTF-16
-            # (wide-character) names natively. Perl's core open()/mkdir() on
-            # Windows go through the legacy ANSI ("*A") Win32 API for a
-            # plain string, which maps each byte through the system code
-            # page (e.g. CP1252) instead of decoding it as UTF-8 -- so the
-            # 2-byte UTF-8 sequence for 'é' (C3 A9) is created on disk as
-            # the two separate characters 'Ã©'. This happens whether or not
-            # the string has Perl's internal utf8 flag set (verified): core
-            # Perl on Windows has no automatic Unicode-filename support (see
-            # perlrun's own "-C" section, which lists filename encoding as
-            # still an open TODO).
-            #
-            # The fix is to go around open() entirely and call the real
-            # Win32 wide-character API, CreateFileW, via Win32API::File
-            # (bundled with Strawberry/ActiveState, not an extra CPAN
-            # dependency). It is a thin binding to the actual C API, which
-            # expects a raw UTF-16LE byte buffer -- not a utf8-flagged Perl
-            # string, that was tried and confirmed *not* to work -- so the
-            # bytes are first decoded from UTF-8 to characters and then
-            # re-encoded to UTF-16LE before the call. OsFHandleOpen() then
-            # wraps the resulting native Win32 handle into an ordinary Perl
-            # filehandle, so every caller downstream (print/binmode/close)
-            # works exactly as it would with a normal open().
-            my $utf16_name = Encode::encode('UTF-16LE', Encode::decode('UTF-8', $out_name));
-            my $handle = Win32API::File::CreateFileW($utf16_name,
-                                                      Win32API::File::GENERIC_WRITE(), 0, [],
-                                                      Win32API::File::CREATE_ALWAYS(),
-                                                      Win32API::File::FILE_ATTRIBUTE_NORMAL(), []);
-            $handle or die "Cannot open '$out_name' for output: $^E";
-            Win32API::File::OsFHandleOpen($new_fd, $handle, 'w')
-                or die "Cannot open '$out_name' for output: $^E";
-        } else {
-            open $new_fd, '>', $out_name or die "Cannot open '$out_name' for output.";
-        }
+        # open_file() dispatches to the right platform-specific mechanism
+        # internally (see its own comment) -- notably CreateFileW on
+        # Windows, since a plain open() there goes through the legacy ANSI
+        # Win32 API and mangles a non-ASCII byte-string filename.
+        my $new_fd = open_file($out_name, 'w') or die "Cannot open '$out_name' for output: $!";
         push @output_stack, $new_fd;
         # my $line = [caller(0)]->[2];
         # my $sub = [caller(1)]->[3];
@@ -1120,8 +1085,12 @@ sub process_http {
         && $resp->{headers}{'last-modified'}){
         my $timestamp = $resp->{headers}{'last-modified'};
         my $epoch = str2epoch($timestamp);
-        if (-f $out_file && $epoch > -1){
-            utime($epoch, $epoch, $out_file) or say STDERR "Cannot set modification time of $resp->{redirected}: $!";
+        if ($epoch > -1){
+            # set_mtime() dispatches internally (see its own comment) --
+            # plain utime() cannot find or touch a non-ASCII filename on
+            # Windows at all.
+            set_mtime($out_file, $epoch)
+                or say STDERR "Cannot set modification time of $resp->{redirected}: $!";
         }
     }
 
@@ -1503,7 +1472,8 @@ sub prepare_http_body_to_post{
     } elsif ($args{'upload-file'}){
         my $file = $args{'upload-file'};
         die "Upload from STDIN is not yet supported" if $file eq '-';
-        open my $fd, '<', $file or die "Can't open '$file'!";
+        # open_file() dispatches internally (Windows + non-ASCII path)
+        my $fd = open_file($file, 'r') or die "Can't open '$file': $!";
         binmode($fd);
         my $buf_size = $IO_BUFFER_SIZE;
         while(my $bytes = $fd->sysread($buf, $buf_size)){
@@ -1843,7 +1813,7 @@ NO_BIN
                 my $BAR_LENGTH = 72;
               CHUNK:
                 while (! $fh->eof){ # loop on the remaining of response
-                    print STDERR sprintf("\r%s: %s%s %.1f%% of %s", $output_name || $fname,
+                    print STDERR sprintf("\r%s: %s%s %.1f%% of %s", decode_for_display($output_name || $fname),
                                          '',
                                          '.' x $BAR_LENGTH,
                                          0,
@@ -1888,7 +1858,7 @@ NO_BIN
                                 $prog += $bytes;
                                 my $pchars = $BAR_LENGTH / $content_length * $prog;
                                 my $pct = 100 / $content_length * $prog;
-                                print STDERR sprintf("\r%s: %s%s %.1f%% of %s", $output_name || $fname,
+                                print STDERR sprintf("\r%s: %s%s %.1f%% of %s", decode_for_display($output_name || $fname),
                                                      '#' x int($pchars),
                                                      '.' x ($BAR_LENGTH - int($pchars)),
                                                      $pct,
@@ -2077,7 +2047,10 @@ sub load_commandline_cookies {
 sub load_cookie_jar {
     my $file = shift;
     my @jar;
-    open my $in, '<', $file or die "Cannot open cookie-jar '$file': $!";
+    # open_file() dispatches internally: a cookie-jar path is CLI-supplied
+    # (-b/--cookie), not URL-derived, but is just as exposed to the
+    # Windows non-ASCII-path bug as any other local file.
+    my $in = open_file($file, 'r') or die "Cannot open cookie-jar '$file': $!";
     my $header_done = 0;
     while (defined (my $line = <$in>)){
         chomp $line;
@@ -2114,7 +2087,9 @@ sub save_cookie_jar {
     if ($file eq '-'){
         $out = *STDOUT;
     } else {
-        open $out, '>', $file or do { say STDERR "* WARNING: failed to save cookies in $file"; return}; # emulate curl
+        # open_file() dispatches internally (Windows + non-ASCII path)
+        $out = open_file($file, 'w')
+            or do { say STDERR "* WARNING: failed to save cookies in $file"; return }; # emulate curl
     }
     my $uagent = $args{'user-agent'};
     print $out <<HEADER;
@@ -2287,10 +2262,22 @@ sub getlinked_action {
 sub discover_from_local {
     my ($url, $local_path, $discovered) = @_;
     return unless $discovered;                          # discovery not active
-    return unless defined $local_path && -f $local_path;
+    return unless defined $local_path && file_exists($local_path); # see file_stat()'s comment (Windows + non-ASCII path)
     return unless $local_path =~ /\.(html?|xhtml|css|js)$/i
                || $local_path =~ m{/$};                 # dir index (index.html)
     open(my $fh, '<', $local_path) or return;
+    # Must match process_http_response_body()'s binmode(':raw') discipline:
+    # without it, this open() picks up the file-wide default
+    # ':encoding(UTF-8)' layer (see `use open ':std', ':encoding(UTF-8)'`
+    # at the top of this file) and DECODES the file's bytes into Perl
+    # characters -- e.g. 'é' becomes the single codepoint U+00E9 instead of
+    # the two raw bytes C3 A9. urlencode() below then percent-encodes that
+    # single character's ord() (0xE9) into "%E9", a single-byte Latin-1/
+    # Windows-1252 escape, instead of the correct two-byte UTF-8 "%C3%A9"
+    # -- and the server 404s on it. Only reachable via -N deciding a page
+    # is up to date and re-parsing the local copy instead of re-fetching,
+    # which is why a fresh fetch of the same URL never shows this.
+    binmode($fh, ':raw');
     local $/;
     my $content = <$fh>;
     close $fh;
@@ -2572,14 +2559,19 @@ sub local_path_for {
 #   returns 1 = up to date (skip),  0 = must fetch
 sub is_up_to_date {
     my ($path, $headers) = @_;
-    return 0 unless defined $path && $path ne '-' && -f $path; # no local file -> fetch
+    return 0 unless defined $path && $path ne '-';
+    # file_stat() (not a bare `-f`/`stat`): see its own comment -- on
+    # Windows, a plain stat-by-name cannot find a file that was correctly
+    # created with a non-ASCII name, which made -N always "fetch" for any
+    # accented local file, defeating the point of --timestamping for it.
+    my @st = file_stat($path);
+    return 0 unless @st;                     # no local file -> fetch
 
     my $lm = $headers->{'last-modified'};
     return 0 unless defined $lm;             # can't prove freshness -> fetch
     my $server_epoch = str2epoch($lm);
     return 0 if $server_epoch < 0;           # unparseable -> fetch
 
-    my @st = stat $path;
     my $local_mtime = $st[9];
     my $local_size  = $st[7];
     # A 0-byte local file is never trustworthy as "up to date": it is either
@@ -3434,6 +3426,198 @@ sub path_escapes_base {
     return 0;
 }
 
+# stat() a local path that may contain non-ASCII bytes (e.g. the raw-byte
+# filenames urldecode() deliberately produces -- see its own comment).
+# Returns the same list CORE::stat() does (13 elements), or an empty list
+# if the file does not exist. Callers should use this (and file_exists()
+# below) instead of a bare `-f`/`-e`/`stat` wherever the path came from a
+# URL, exactly as they'd otherwise call the builtins.
+#
+# On Windows, a plain `-f`/`stat()` on a byte-string path goes through the
+# legacy ANSI Win32 API, which cannot resolve a file that was correctly
+# created with a wide-character (UTF-16) name via CreateFileW (see
+# redirect_output_to_file()): confirmed empirically -- a file created with
+# a byte-string name containing the raw UTF-8 bytes for 'é' is invisible to
+# a plain `-f` on those same bytes, even though it genuinely exists. This
+# broke -N/--timestamping for any accented filename: is_up_to_date()'s
+# `-f $path` always failed, so freshness could never be established and
+# the file was re-fetched on every run.
+#
+# Fix: open the file (read-only, must already exist) via CreateFileW with
+# a proper UTF-16LE name, then stat() the resulting Perl FILEHANDLE, not
+# the path string. Once the OS handle exists, Perl's own fstat() on it is
+# correct regardless of what encoding was used to open it, sidestepping
+# the by-name lookup entirely.
+sub file_stat {
+    my $path = shift;
+    return stat($path) unless $^O eq 'MSWin32';
+    my $utf16_name = Encode::encode('UTF-16LE', Encode::decode('UTF-8', $path)) . "\x00\x00";
+    my $handle = Win32API::File::CreateFileW($utf16_name,
+                                              Win32API::File::GENERIC_READ(),
+                                              Win32API::File::FILE_SHARE_READ() | Win32API::File::FILE_SHARE_WRITE(),
+                                              [], Win32API::File::OPEN_EXISTING(), 0, []);
+    return () unless $handle;
+    my $fh = gensym();
+    Win32API::File::OsFHandleOpen($fh, $handle, 'r') or return ();
+    my @st = stat($fh);
+    close $fh;
+    return @st;
+}
+
+# Convenience wrapper matching a bare `-f $path` filetest, using file_stat()
+# above so it works correctly on Windows for a non-ASCII path.
+sub file_exists {
+    my $path = shift;
+    return file_stat($path) ? 1 : 0;
+}
+
+# Convenience wrapper matching a bare `-d $path` filetest. Unlike a file, a
+# directory can't be opened via CreateFileW without the special
+# FILE_FLAG_BACKUP_SEMANTICS flag, so this uses GetFileAttributesW instead:
+# it works on both files and directories without opening a handle at all,
+# and INVALID_FILE_ATTRIBUTES cleanly signals "does not exist" (verified:
+# correctly returns false for a nonexistent path and for an existing plain
+# file, true only for an existing directory).
+#
+# On Windows: confirmed via make_path() -- a directory correctly created
+# with a wide-character name (see make_directory() below) is, like a file,
+# invisible to a plain `-d` on its byte-string name. That made make_path()
+# try to recreate an already-existing accented directory on every
+# subsequent call (e.g. a second file downloaded into it, or a second
+# crawl run), and Win32::CreateDirectory() on an existing directory fails
+# with ERROR_ALREADY_EXISTS, which make_path() treated as fatal: a second
+# request into the same accented directory would crash pcurl outright.
+sub directory_exists {
+    my $path = shift;
+    if ($^O eq 'MSWin32'){
+        my $utf16_name = Encode::encode('UTF-16LE', Encode::decode('UTF-8', $path)) . "\x00\x00";
+        my $attrs = Win32API::File::GetFileAttributesW($utf16_name);
+        return 0 if !defined($attrs) || $attrs == Win32API::File::INVALID_FILE_ATTRIBUTES();
+        return ($attrs & Win32API::File::FILE_ATTRIBUTE_DIRECTORY()) ? 1 : 0;
+    }
+    return -d $path ? 1 : 0;
+}
+
+# Open a local file whose path may contain non-ASCII bytes. $mode is 'r'
+# (read, file must already exist) or 'w' (write, create or truncate,
+# matching Perl's '>' semantics). $path may also be a SCALAR REF for an
+# in-memory capture buffer (see redirect_output_to_file()) -- that case is
+# never platform-specific and is handled the same way everywhere. Returns
+# an ordinary Perl filehandle on success -- usable with
+# print/<>/binmode/close exactly like open()'s -- or undef on failure, with
+# $! set to a human-readable message on every platform: on Windows,
+# bridged from $^E (`$! = $^E` normalizes it to Perl's usual errno-style
+# text, e.g. "No such file or directory"), so callers never need to check a
+# different variable depending on platform.
+#
+# On Windows (a plain path, not a ref): core open() goes through the
+# legacy ANSI Win32 API, which mangles a byte-string path with non-ASCII
+# bytes instead of decoding it as UTF-8 (see file_stat()'s comment for the
+# same root cause). The fix goes around open() entirely and calls the real
+# Win32 wide-character API, CreateFileW, via Win32API::File (bundled with
+# Strawberry/ActiveState, not an extra CPAN dependency). It is a thin
+# binding to the actual C API, which expects a raw UTF-16LE byte buffer --
+# not a utf8-flagged Perl string, that was tried and confirmed *not* to
+# work -- so the bytes are first decoded from UTF-8 to characters and then
+# re-encoded to UTF-16LE before the call. CreateFileW also expects that
+# buffer to be NUL-terminated (it takes an LPCWSTR, not a length-prefixed
+# buffer): without appending one, the C call reads past the end of the
+# buffer looking for the terminator, picking up whatever happens to be in
+# adjacent memory -- confirmed via a real crawl run that silently produced
+# a filename with a stray '}' appended, picked up from adjacent memory.
+# OsFHandleOpen() then wraps the resulting native Win32 handle into an
+# ordinary Perl filehandle, so every caller downstream works exactly as it
+# would with a normal open(). Shared by every local-file open, not just a
+# URL-derived path: --cookie/--cookie-jar/--upload-file are just as
+# exposed to this as redirect_output_to_file()'s own downloads.
+sub open_file {
+    my ($path, $mode) = @_;
+    my $posix_mode = $mode eq 'w' ? '>' : '<';
+    if (ref($path)){
+        my $fh = gensym();
+        open($fh, $posix_mode, $path) or return undef;
+        return $fh;
+    }
+    if ($^O eq 'MSWin32'){
+        my $utf16_name = Encode::encode('UTF-16LE', Encode::decode('UTF-8', $path)) . "\x00\x00";
+        my ($access, $create) = $mode eq 'w'
+            ? (Win32API::File::GENERIC_WRITE(), Win32API::File::CREATE_ALWAYS())
+            : (Win32API::File::GENERIC_READ(),  Win32API::File::OPEN_EXISTING());
+        my $handle = Win32API::File::CreateFileW($utf16_name, $access,
+                                                  Win32API::File::FILE_SHARE_READ() | Win32API::File::FILE_SHARE_WRITE(),
+                                                  [], $create, Win32API::File::FILE_ATTRIBUTE_NORMAL(), []);
+        unless ($handle){ $! = $^E; return undef; }
+        my $fh = gensym();
+        unless (Win32API::File::OsFHandleOpen($fh, $handle, $mode)){ $! = $^E; return undef; }
+        return $fh;
+    }
+    my $fh = gensym();
+    open($fh, $posix_mode, $path) or return undef;
+    return $fh;
+}
+
+# Set a local file's mtime from a Last-Modified epoch (the --remote-time
+# implementation), working correctly for a non-ASCII filename on Windows.
+#
+# Perl's own utime() has two separate problems there: (1) like stat()/-f
+# (see file_stat()'s comment), a byte-string path with non-ASCII bytes
+# goes through the legacy ANSI API and cannot find a file that was
+# correctly created with a wide-character name -- confirmed empirically,
+# utime() silently returns 0 (no files touched) for such a path, meaning
+# -R never stamped the mtime of an accented download, and it was left at
+# "now" (the download time) instead of the server's Last-Modified. That in
+# turn undermined -N/--timestamping on the *next* run too: a same-day
+# rerun happened to still compare as "not older", but any later rerun
+# would see a stale local mtime and refetch every time -- this is what
+# produced the "today" mtime spotted on the downloaded file instead of the
+# June date the other, unaccented files correctly got. (2) unlike
+# stat()/fstat(), operating on an already-open filehandle isn't a
+# workaround here either: Perl's utime() on Windows doesn't implement
+# futimes() at all ("The futimes function is unimplemented"). So the fix
+# has to bypass Perl's utime() entirely and call the real Win32
+# SetFileTime() API directly, via Win32::API (bundled with Strawberry/
+# ActiveState, not an extra CPAN dependency -- Win32API::File does not
+# wrap this particular call). $epoch is a Unix epoch (seconds since
+# 1970-01-01); it is converted to a Windows FILETIME (100ns ticks since
+# 1601-01-01, the fixed 11644473600-second offset between the two epochs)
+# before the call. Only the last-write time is changed; creation/
+# last-access time are left untouched (NULL/0).
+sub set_mtime {
+    my ($path, $epoch) = @_;
+    unless ($^O eq 'MSWin32'){
+        return (-f $path && utime($epoch, $epoch, $path)) ? 1 : 0;
+    }
+    my $utf16_name = Encode::encode('UTF-16LE', Encode::decode('UTF-8', $path)) . "\x00\x00";
+    my $handle = Win32API::File::CreateFileW($utf16_name,
+                                              Win32API::File::GENERIC_WRITE() | Win32API::File::FILE_WRITE_ATTRIBUTES(),
+                                              Win32API::File::FILE_SHARE_READ() | Win32API::File::FILE_SHARE_WRITE(),
+                                              [], Win32API::File::OPEN_EXISTING(), 0, []);
+    return 0 unless $handle;
+    my $filetime = ($epoch + 11644473600) * 10_000_000;
+    my $ft_bytes = pack('VV', $filetime & 0xFFFFFFFF, ($filetime >> 32) & 0xFFFFFFFF);
+    state $SetFileTime = Win32::API->new('kernel32', 'SetFileTime', 'NPPP', 'N');
+    my $ok = $SetFileTime && $SetFileTime->Call($handle, 0, 0, $ft_bytes);
+    Win32API::File::CloseHandle($handle);
+    return $ok ? 1 : 0;
+}
+
+# Create a single directory level whose path may contain non-ASCII bytes.
+# Returns a true value on success.
+#
+# On Windows: core mkdir() goes through the same legacy ANSI Win32 API as
+# open() (see open_file()'s comment) and mangles a non-ASCII byte-string
+# name. Unlike CreateFileW, Win32::CreateDirectory() conveniently accepts a
+# decoded (utf8-flagged) Perl string directly and handles the
+# wide-character conversion itself, so no manual UTF-16LE re-encoding is
+# needed here (verified: this differs from CreateFileW, which does need a
+# raw UTF-16LE buffer).
+sub make_directory {
+    my $path = shift;
+    return $^O eq 'MSWin32'
+        ? (Win32::CreateDirectory(Encode::decode('UTF-8', $path)) ? 1 : 0)
+        : (mkdir($path) ? 1 : 0);
+}
+
 # make local directory tree
 sub make_path {
     my ($path, $from) = @_;
@@ -3445,21 +3629,8 @@ sub make_path {
         my @dirs = split '/', $1;
         for (my $i=0; $i<= $#dirs; $i++){
             my $dir_to_create = join '/', @dirs[ 0 .. $i ];
-            unless (-d $dir_to_create){
-                # Same UTF-8-bytes-vs-UTF-16-names mismatch as in
-                # redirect_output_to_file() (see its comment for the full
-                # explanation), for directories instead of files: core
-                # mkdir() on Windows mangles a non-ASCII byte-string name.
-                # Unlike CreateFileW, Win32::CreateDirectory conveniently
-                # accepts a decoded (utf8-flagged) Perl string directly and
-                # handles the wide-character conversion itself, so no manual
-                # UTF-16LE re-encoding is needed here.
-                if ($^O eq 'MSWin32'){
-                    Win32::CreateDirectory(Encode::decode('UTF-8', $dir_to_create))
-                        or die "Cannot create directory $dir_to_create: $^E";
-                } else {
-                    mkdir $dir_to_create or die "Cannot create directory $dir_to_create: $!";
-                }
+            unless (directory_exists($dir_to_create)){
+                make_directory($dir_to_create) or die "Cannot create directory $dir_to_create: $!";
             }
         }
     } # else a file?
@@ -3570,6 +3741,105 @@ sub form_urldecode {
     $s =~ s/%u([0-9A-Fa-f]{4})/Encode::encode('UTF-8', chr(hex($1)))/eg;
     $s =~ s/%([0-9A-Fa-f]{2})/pack('C', hex($1))/eg;
     return $s;
+}
+
+# Make a raw byte string (e.g. a urldecode()'d local filename -- see
+# urldecode()'s own comment: it deliberately returns bytes) safe to print
+# through STDOUT/STDERR, which carry the ':encoding(UTF-8)' layer (see
+# `use open ':std', ':encoding(UTF-8)'` at the top of this file). Printing
+# raw bytes there directly makes the layer re-encode them as if they were
+# Latin-1 characters, corrupting any non-ASCII byte for display (e.g. 'é',
+# bytes C3 A9, would print as the mojibake "Ã©"). Display-only: the actual
+# byte string used for the file on disk is untouched by this -- callers
+# must keep using the original bytes for anything that isn't printing.
+# FB_DEFAULT (lenient): a malformed byte sequence must never crash a
+# progress bar -- an invalid byte becomes U+FFFD instead of dying.
+#
+# This is verified correct for REDIRECTED STDOUT/STDERR (a file or pipe),
+# which is what every test of it in this project has used. It is NOT
+# sufficient on a real, live-attached Windows console -- see
+# print_display_line() below for that separate case and why.
+sub decode_for_display {
+    my $bytes = shift;
+    return Encode::decode('UTF-8', $bytes, Encode::FB_DEFAULT());
+}
+
+# Print one line (no trailing "\n" in $text -- this adds it) to STDERR,
+# correctly whether the destination is a redirected file/pipe or a real,
+# live Windows console. $text is expected to already be a decoded
+# (utf8-flagged) Perl character string, e.g. built using
+# decode_for_display() above for any non-ASCII part of it.
+#
+# For redirected output (the common case): a plain `say STDERR $text` is
+# correct, since a redirected filehandle honors the ':encoding(UTF-8)'
+# PerlIO layer (see decode_for_display()'s comment) -- this is the
+# existing, already-verified path, unchanged here.
+#
+# For a live, attached Windows console specifically: confirmed empirically
+# that this is *not* the case, and confirmed (via a real user's live CP850
+# console) that a first attempt at a fix here was wrong. That attempt
+# wrote each character's own Unicode codepoint value into the console's
+# screen buffer directly (via Win32::Console, bypassing PerlIO), on the
+# assumption that a *stored* buffer value renders as its correct Unicode
+# glyph regardless of the active codepage. It does not: the classic
+# Windows console host does its glyph lookup for any buffer value <= 0xFF
+# using the *active output codepage's own table*, not as a true Unicode
+# codepoint -- so 'é' (U+00E9) rendered using CP850's entry for byte 0xE9,
+# which is 'Ú', not 'é' (CP850's actual entry for 'é' is byte 0x82). This
+# was confirmed the only way possible from this project's own tooling
+# (which cannot observe a live console): reading back the stored value
+# from a screen buffer via Win32::Console's own read methods proved the
+# *storage* mechanism worked as designed -- the live user test proved
+# *display* still didn't, because the render step doesn't work the way
+# that verification assumed.
+#
+# The actual fix: query the console's real active output codepage
+# (Win32::Console::OutputCP(), a plain numeric codepage id like 850 -- no
+# console object needed, and confirmed this call succeeds even without a
+# live console attached) and encode the text into *that* codepage's own
+# byte values (e.g. Encode::encode('cp850', ...) correctly gives byte 0x82
+# for 'é', matching its real position in that table) rather than assuming
+# UTF-8 or reusing the Unicode codepoint number. Those pre-encoded bytes
+# must then reach STDERR completely unchanged -- confirmed that `syswrite`
+# refuses outright on a layered handle ("syswrite() isn't allowed on :utf8
+# handles"), and confirmed that a scoped `binmode(STDERR, ':raw')` around
+# just this one `print`, restored to ':encoding(UTF-8)' immediately after,
+# correctly writes the exact bytes given with no further transformation,
+# while leaving every other STDERR write in the program on the normal,
+# already-verified UTF-8 path.
+#
+# codepage 65001 (i.e. the console is already running in UTF-8 mode, e.g.
+# after `chcp 65001`) needs none of this: the original decode_for_display()
+# + plain print path is correct there, so it's used as-is.
+#
+# VERIFIED on a real live Windows console (cmd.exe, active codepage 850,
+# French locale): 'é' in a filename now displays correctly. This project's
+# own tooling cannot observe a live console directly (every available
+# tool redirects output by construction, which is also why the first
+# attempt's flawed WCHAR-buffer assumption wasn't caught before a live
+# test) -- confirmation came from a user running this same code on their
+# own machine.
+sub print_display_line {
+    my $text = shift;
+    if ($^O eq 'MSWin32' && -t STDERR){
+        # -t STDERR: OutputCP() reports the attached console's codepage
+        # regardless of whether STDERR itself is redirected (confirmed:
+        # still 850 with STDERR sent to a file) -- without this guard,
+        # redirected output would get wrongly console-codepage-transcoded
+        # instead of staying proper UTF-8.
+        my $cp = eval { Win32::Console::OutputCP() };
+        if ($cp && $cp != 65001){
+            my $charset = "cp$cp";
+            if (Encode::resolve_alias($charset)){
+                my $bytes = Encode::encode($charset, $text, Encode::FB_DEFAULT());
+                binmode(STDERR, ':raw');
+                print STDERR $bytes, "\r\n";
+                binmode(STDERR, ':encoding(UTF-8)');
+                return;
+            }
+        }
+    }
+    say STDERR $text;
 }
 
 # tell if we requested HTTP v0.9

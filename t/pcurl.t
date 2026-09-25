@@ -158,6 +158,25 @@ subtest 'urldecode vs form_urldecode - "+" handling must not be conflated' => su
     is(Pcurl::form_urldecode('a%2Bb'), 'a+b', 'form_urldecode(): %2B also decodes to a literal +');
 };
 
+subtest 'decode_for_display - safe to print a urldecode()d byte string' => sub {
+    # Regression guard: printing a urldecode()'d byte string (e.g. a local
+    # filename with a non-ASCII char) directly through STDOUT/STDERR, which
+    # carry the ':encoding(UTF-8)' layer, re-encodes it as if it were Latin-1
+    # and mojibake's it (the "--progression" filename display bug). The
+    # fixed value's utf8 flag must be ON, so the output layer encodes it
+    # exactly once.
+    my $bytes = "caf\xC3\xA9.pdf";  # urldecode()'s output for café.pdf: raw UTF-8 bytes, flag off
+    ok(!utf8::is_utf8($bytes), 'sanity: input is a byte string');
+    my $shown = Pcurl::decode_for_display($bytes);
+    ok(utf8::is_utf8($shown), 'result is utf8-flagged (a character string)');
+    is($shown, "caf\x{E9}.pdf", 'bytes C3 A9 decode to the single character é (U+00E9)');
+    # invalid UTF-8 must not die (a progress bar must never crash the download)
+    my $invalid = "caf\xFF.pdf";
+    my $result = eval { Pcurl::decode_for_display($invalid) };
+    ok(!$@, 'invalid UTF-8 byte does not die') or diag $@;
+    is(length($result), length($invalid), 'invalid byte replaced 1-for-1 (with U+FFFD), not dropped');
+};
+
 subtest 'urldecode - hex escapes with letters (regression: not just digits)' => sub {
     # Historical bug guard: %XX must decode hex letters A-F, not only digits.
     is(Pcurl::urldecode('a%2Fb'),   'a/b',  '%2F (letter F) decodes to /');
@@ -612,6 +631,40 @@ subtest 'discover_from_local - timestamping skip still discovers links' => sub {
     # no discovery target (undef) => no-op
     Pcurl::discover_from_local($u, $file, undef);
     ok(1, 'undef discovered list is a safe no-op');
+
+    Pcurl::reset_state();
+    Pcurl::simulate_cli_settings(header=>[], 'user-agent'=>'pCurl-test');
+};
+
+subtest 'discover_from_local - accented href must not be read through a decoding layer' => sub {
+    # Regression guard: discover_from_local() must read the cached file as
+    # raw BYTES, matching process_http_response_body()'s binmode(':raw')
+    # discipline for the live HTTP path. Without it, the file-wide default
+    # ':encoding(UTF-8)' open layer (see `use open ':std', ':encoding(UTF-8)'`
+    # at the top of Pcurl.pm) decodes the file's UTF-8 bytes into Perl
+    # characters -- e.g. 'é' becomes the single codepoint U+00E9 instead of
+    # the two raw bytes C3 A9 -- and urlencode() then emits the single-byte
+    # Latin-1 escape "%E9" instead of the correct two-byte UTF-8 "%C3%A9",
+    # which the real server 404s on. Only reachable via -N re-parsing a
+    # cached local copy instead of re-fetching, so a plain live fetch never
+    # exercises this path.
+    my $dir = tempdir(CLEANUP => 1);
+    my $file = "$dir/page.html";
+    open my $fh, '>', $file or die "cannot write $file: $!";
+    print $fh "<a href=\"4 - La Mal\xC3\xA9diction du Pharaon.pdf\">x</a>";
+    close $fh;
+
+    my $u = Pcurl::parse_uri('http://example.com/dir/page.html');
+    Pcurl::complete_url_default_values($u);
+
+    Pcurl::reset_state();
+    Pcurl::simulate_cli_settings('recursive'=>1, 'no-parent'=>0, 'span-hosts'=>0,
+                                 'relative'=>0, 'page-requisites'=>0, header=>[]);
+    my @discovered;
+    Pcurl::discover_from_local($u, $file, \@discovered);
+    is_deeply(\@discovered,
+              [ 'http://example.com/dir/4%20-%20La%20Mal%C3%A9diction%20du%20Pharaon.pdf' ],
+              'accented href decoded from the correct two-byte UTF-8 %C3%A9, not the single-byte %E9');
 
     Pcurl::reset_state();
     Pcurl::simulate_cli_settings(header=>[], 'user-agent'=>'pCurl-test');
