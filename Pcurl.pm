@@ -1191,6 +1191,19 @@ sub redact_header_line {
     return $line;
 }
 
+# Redact the userinfo (user[:password]) part of a URL for verbose/debug
+# display, e.g. "http://user:secret@proxy:8012" -> "http://***REDACTED***@proxy:8012".
+# Honors --no-auth-redact (shows the raw URL, as curl does). Only the credential
+# portion between "scheme://" and the "@" is masked; the host/port/path are kept.
+sub redact_url {
+    my $url = shift;
+    return $url if $args{'no-auth-redact'};
+    return $url unless defined $url;
+    # match "<scheme>://<userinfo>@<rest>" and mask the userinfo
+    $url =~ s{^(\w+://)[^/@]+@}{$1***REDACTED***\@};
+    return $url;
+}
+
 # transmission of headers + body to the server
 sub send_http_request {
     my ($IN, $OUT, $ERR, $headers, $body) = @_;
@@ -1262,7 +1275,7 @@ sub get_proxy_settings {
     }
     $proxy = complete_url_default_values($proxy);
     
-    say STDERR "* Using proxy $proxy->{url}" if $args{verbose} || $args{debug};
+    say STDERR "* Using proxy " . redact_url($proxy->{url}) if $args{verbose} || $args{debug};
     return $proxy;
 }
 

@@ -599,6 +599,27 @@ subtest 'redact_header_line - --no-auth-redact shows raw value' => sub {
     Pcurl::simulate_cli_settings( 'no-auth-redact' => 0 );
 };
 
+subtest 'redact_url - masks proxy credentials by default (security)' => sub {
+    Pcurl::simulate_cli_settings( 'no-auth-redact' => 0 );
+    is(Pcurl::redact_url('http://alice:secret@pslux.ec.europa.eu:8012'),
+       'http://***REDACTED***@pslux.ec.europa.eu:8012',
+       'user:password masked in proxy url');
+    is(Pcurl::redact_url('http://alice@proxy:8012'),
+       'http://***REDACTED***@proxy:8012',
+       'user-only userinfo masked');
+    is(Pcurl::redact_url('http://proxy.example.com:8012'),
+       'http://proxy.example.com:8012',
+       'url without credentials untouched');
+    is(Pcurl::redact_url('https://user:pw@host/path?a=b'),
+       'https://***REDACTED***@host/path?a=b',
+       'only userinfo masked, host/path/query kept');
+    Pcurl::simulate_cli_settings( 'no-auth-redact' => 1 );
+    is(Pcurl::redact_url('http://alice:secret@proxy:8012'),
+       'http://alice:secret@proxy:8012',
+       'raw url shown when redaction disabled');
+    Pcurl::simulate_cli_settings( 'no-auth-redact' => 0 );
+};
+
 # ---------------------------------------------------------------------------
 subtest 'discover_from_local - timestamping skip still discovers links' => sub {
     # Write a local cached page that references a requisite and a child link.
