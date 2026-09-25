@@ -4,7 +4,7 @@
 #         with built-in json and xml parsers
 #         and custom features like STOMP message sending
 #
-# (c) 2019, 2020, 2022 - Sébastien Kirche
+# (c) 2019, 2020, 2022, 2026 - Sébastien Kirche
 
 package Pcurl;
 
@@ -34,14 +34,7 @@ use Time::HiRes qw( sleep );
 use Time::Local;
 # use Carp::Always;
 
-# Windows-only, bundled with Strawberry/ActiveState Perl (not an extra CPAN
-# install) -- used only to create files/directories with correctly-encoded
-# Unicode names on Windows. See the comments in redirect_output_to_file()
-# and make_path() for why the plain core open()/mkdir() are not enough
-# there. Loaded conditionally (and its symbols always called fully
-# qualified, e.g. Win32API::File::GENERIC_WRITE()) so macOS/Linux, which do
-# not ship these modules, do not need them, and never import them, still
-# compile this file cleanly under `use strict`.
+# some plaform specific imports, once again Windows does not make things the way others do :o(
 use if $^O eq 'MSWin32', 'Win32API::File';
 use if $^O eq 'MSWin32', 'Win32';
 use if $^O eq 'MSWin32', 'Win32::API';
@@ -1086,9 +1079,6 @@ sub process_http {
         my $timestamp = $resp->{headers}{'last-modified'};
         my $epoch = str2epoch($timestamp);
         if ($epoch > -1){
-            # set_mtime() dispatches internally (see its own comment) --
-            # plain utime() cannot find or touch a non-ASCII filename on
-            # Windows at all.
             set_mtime($out_file, $epoch)
                 or say STDERR "Cannot set modification time of $resp->{redirected}: $!";
         }
@@ -2503,9 +2493,7 @@ sub auth_string {
     return $auth . '@';
 }
     
-# Sleep for --wait seconds (optionally randomized by --random-wait). Extracted
-# so the delay is applied consistently by process_http and the --timestamping
-# pre-check (which paces the HEAD request).
+# Sleep for --wait seconds (optionally randomized by --random-wait)
 sub crawl_delay {
     return unless $args{wait};
     my $delay = $args{wait};
@@ -2516,11 +2504,9 @@ sub crawl_delay {
     sleep($delay);
 }
 
-# Compute the local file path a download would write for the given parsed url,
-# mirroring the derivation in process_http (fname + cut-dirs + host dir +
-# prefix). Returns the path, or undef when no local file can be determined
-# (in which case --timestamping simply proceeds to fetch). Pure / no side
-# effects, so it is safe to call from the reentrancy-sensitive pre-check.
+# Compute the local file path a download would write for the given parsed url
+# Returns the path, or undef when no local file can be determined
+# (in which case --timestamping simply proceeds to fetch).
 sub local_path_for {
     my $url = shift;
     my $fname;
@@ -2567,16 +2553,11 @@ sub local_path_for {
 
 # Pure freshness predicate for --timestamping. Given a local file path and the
 # HEAD response headers (last-modified + content-length), decide whether the
-# local copy is up to date (skip) or must be (re)fetched. See the decision
-# matrix in plan_timestamping.md.
+# local copy is up to date (skip) or must be (re)fetched.
 #   returns 1 = up to date (skip),  0 = must fetch
 sub is_up_to_date {
     my ($path, $headers) = @_;
     return 0 unless defined $path && $path ne '-';
-    # file_stat() (not a bare `-f`/`stat`): see its own comment -- on
-    # Windows, a plain stat-by-name cannot find a file that was correctly
-    # created with a non-ASCII name, which made -N always "fetch" for any
-    # accented local file, defeating the point of --timestamping for it.
     my @st = file_stat($path);
     return 0 unless @st;                     # no local file -> fetch
 
@@ -2591,10 +2572,7 @@ sub is_up_to_date {
     # a genuinely empty resource (vanishingly rare for what -N is used for)
     # or, more commonly, the leftover of a previous failed/interrupted
     # download (e.g. a connection error, or a platform-specific I/O bug)
-    # that still got its mtime stamped from Last-Modified via -R. Since the
-    # size check just below only runs when the server sends a Content-Length
-    # header, a server that omits it (e.g. chunked responses) would
-    # otherwise let such an empty file be considered fresh forever.
+    # that still got its mtime stamped from Last-Modified via -R.
     return 0 if $local_size == 0;             # empty local file -> fetch
     return 0 if $server_epoch > $local_mtime; # server newer -> fetch
 
@@ -2610,10 +2588,7 @@ sub is_up_to_date {
 
 # Side-effect-free HEAD probe used by --timestamping. Opens a connection, sends
 # a HEAD, reads only the response headers, and returns the parsed header hash
-# (or undef on failure). Deliberately avoids the stateful process_http path:
-# it does not touch $process_action, the discovery list, %processed_request /
-# %failed_url, and does not merge Set-Cookie into the shared jar (cookies are
-# read-only here). See the reentrancy analysis in plan_timestamping.md.
+# (or undef on failure).
 sub head_request {
     my $url = shift;
     my ($IN, $OUT, $ERR);
