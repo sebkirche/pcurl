@@ -139,6 +139,7 @@ my @output_stack = ( *STDOUT );
 
 my ($http_vers, $tunnel_pid, $auto_ref, $use_cookies, $cookies, $process_action);
 my %rel_url_to_local_dir;
+my @original_argv;              # snapshot of args before GetOptions (for save_invocation)
 
 my $index_name;
 my $acceptrx;
@@ -171,6 +172,11 @@ sub cli {
 # Clear any accumulator/session state left over from a previous invocation
 # when pcurl is used as a loadable module and cli() is called more than once.
 reset_state();
+
+# Snapshot the original argument list before GetOptions consumes it, so that
+# save_invocation() can record the exact command line used (crawler mode).
+# (Done after reset_state(), which clears @original_argv.)
+@original_argv = @_;
 
 my @getopt_defs = (
     'accept=s',
@@ -257,6 +263,7 @@ my @getopt_defs = (
     'directory-prefix|P=s',
     'default-page=s',
     'level|l=i',
+    'no-command-file',
     'no-host-directories',
     'no-parent|np',
     'page-requisites',
@@ -464,6 +471,13 @@ if ($args{'get-curl-command'}){
     exit 0;
 }
 
+# In crawler mode, record the command line that produced this download tree
+# (into <prefix>pcurl.txt) so a mirror can be reproduced later. Suppressed with
+# --no-command-file.
+if ($args{recursive} && !$args{'no-command-file'}){
+    save_invocation($cli_url);
+}
+
 process_loop([$cli_url], $args{level} // $max_levels);
 say STDERR sprintf("* %d link%s processed", scalar(keys %processed_request), (scalar keys %processed_request > 1 ? 's' : '')) if $args{recursive} && ($args{summary} || $args{verbose} || $args{debug});
 if ($args{summary}){
@@ -494,6 +508,31 @@ sub simulate_cli_settings {
     %args = (%args, %params);
 }
 
+# In crawler mode, write the command line used for this run into a "pcurl.txt"
+# file at the download root (honoring --directory-prefix). This lets a mirror be
+# reproduced or documented later. Credentials embedded in the target URL are
+# redacted unless --no-auth-redact is given. Suppressed by --no-command-file.
+sub save_invocation {
+    my ($cli_url) = @_;
+
+    my $file = "${prefix}pcurl.txt";
+    make_path($file) if $prefix; # create the prefix directory tree if needed
+
+    open(my $fh, '>', $file) or do {
+        say STDERR "* Cannot write command file '$file': $!";
+        return;
+    };
+    # Rebuild the invocation from the original argument snapshot, redacting any
+    # userinfo credentials embedded in URL-looking arguments. Fall back to the
+    # resolved url when the snapshot is empty (e.g. programmatic invocation).
+    my @src = @original_argv ? @original_argv : ($cli_url);
+    my @argv = map { m{^\w+://} ? redact_url($_) : $_ } @src;
+    say $fh sprintf("# pCurl/%s invocation recorded %s", $VERSION, scalar(gmtime()) . ' GMT');
+    say $fh join(' ', $0, @argv);
+    close $fh;
+    say STDERR "* Command line saved to $file" if $args{verbose} || $args{debug};
+}
+
 # Reset the package-level accumulator/session state to its defaults.
 #
 # pcurl keeps its state in file-lexical globals (see top of file). That is fine
@@ -516,6 +555,7 @@ sub reset_state {
     %skipped_url          = ();
     %discovered_url       = ();
     $asset_counter        = 0;
+    @original_argv        = ();
 
     $http_vers      = '1.1';    # default HTTP version
     $tunnel_pid     = undef;
@@ -5150,6 +5190,14 @@ Specify the name of the index file when directory browsing is allowed by the ser
 =item -l, --level <number>
 
 Specify the maximum number of jump to explore from initial url. Default is 5. 0 is equivalent to 'get all site'.
+
+=item --no-command-file
+
+In crawler mode (C<--recursive>), pcurl writes the command line used for the
+run into a F<pcurl.txt> file at the download root (honoring
+C<--directory-prefix>), so the mirror can be reproduced or documented later.
+Credentials embedded in the target URL are redacted unless C<--no-auth-redact>
+is given. Use C<--no-command-file> to disable the creation of that file.
 
 =item --no-host-directories
 

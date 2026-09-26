@@ -380,6 +380,13 @@ Web crawling features:
         Specify the maximum number of jump to explore from initial url.
         Default is 5. 0 is equivalent to 'get all site'.
 
+    --no-command-file
+        In crawler mode (--recursive), pcurl writes the command line used for
+        the run into a pcurl.txt file at the download root (honoring
+        --directory-prefix), so the mirror can be reproduced later. Credentials
+        embedded in the target URL are redacted unless --no-auth-redact is
+        given. Use --no-command-file to disable the creation of that file.
+
     --no-host-directories
         Allow to disable the creation of a common ancestor named after the
         host name for all retrieved resources.
